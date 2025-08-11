@@ -417,6 +417,20 @@ def create_correlation_heatmap(returns):
 
 # Main application
 def main():
+    # Initialize session state for optimization goal
+    if "optimization_goal" not in st.session_state:
+        st.session_state.optimization_goal = "Max Sharpe"
+    
+    if "target_return" not in st.session_state:
+        st.session_state.target_return = 0.10
+    
+    # Initialize other optimization-related session state variables
+    if "optimized_weights" not in st.session_state:
+        st.session_state.optimized_weights = None
+    
+    if "optimization_type" not in st.session_state:
+        st.session_state.optimization_type = None
+    
     st.markdown('<h1 class="main-header">Interactive Portfolio Builder</h1>', unsafe_allow_html=True)
     
     # Sidebar for global settings
@@ -743,21 +757,36 @@ def main():
             optimization_goal = st.selectbox(
                 "Optimization Goal",
                 ["Max Sharpe", "Min Volatility", "Max Return", "Custom Return Target"],
-                help="Choose your optimization objective"
+                index=["Max Sharpe", "Min Volatility", "Max Return", "Custom Return Target"].index(st.session_state.optimization_goal),
+                help="Choose your optimization objective",
+                key="optimization_goal_selectbox"
             )
+            
+            # Update session state when optimization goal changes
+            if optimization_goal != st.session_state.optimization_goal:
+                st.session_state.optimization_goal = optimization_goal
         
         with col2:
             target_return = None
             if optimization_goal == "Custom Return Target":
+                # Initialize target return in session state if not exists
+                if "target_return" not in st.session_state:
+                    st.session_state.target_return = 0.10
+                
                 target_return = st.number_input(
                     "Target Annual Return",
                     min_value=0.0,
                     max_value=1.0,
-                    value=0.10,
+                    value=st.session_state.target_return,
                     step=0.01,
                     format="%.2f",
-                    help="Target annual return for optimization"
+                    help="Target annual return for optimization",
+                    key="target_return_input"
                 )
+                
+                # Update session state when target return changes
+                if target_return != st.session_state.target_return:
+                    st.session_state.target_return = target_return
         
         if st.button("Optimize Portfolio"):
             # Perform optimization
@@ -814,8 +843,11 @@ def main():
                         f"{optimal_metrics['Max Drawdown']:.2%}"
                     )
                 
-                # Efficient frontier
+                                # Efficient frontier with fixed 3% risk-free rate
                 st.subheader("Efficient Frontier")
+                
+                # Fixed 3% risk-free rate for CML
+                risk_free_rate = 0.03
                 
                 try:
                     # Use the same robust cleaning for efficient frontier
@@ -844,37 +876,86 @@ def main():
                     
                     ef = EfficientFrontier(mu, S)
                     
-                    # Generate efficient frontier points
-                    # Get min and max volatility for the frontier
-                    try:
-                        min_vol = ef.min_volatility()
-                        min_vol_ret = ef.portfolio_performance()[0]
-                        min_vol_vol = ef.portfolio_performance()[1]
-                    except Exception as e:
-                        st.error(f"Error calculating minimum volatility portfolio: {e}")
-                        return
+                    # Calculate key portfolios
+                    portfolios = {}
                     
-                    # Get max return portfolio (100% allocation to highest return asset)
+                    # 1. GMV Portfolio (Global Minimum Variance)
+                    try:
+                        ef_gmv = EfficientFrontier(mu, S)
+                        ef_gmv.min_volatility()
+                        gmv_weights = ef_gmv.clean_weights()
+                        gmv_returns = calculate_portfolio_returns(clean_returns, gmv_weights)
+                        gmv_metrics = calculate_portfolio_metrics(gmv_returns)
+                        portfolios['GMV'] = {
+                            'volatility': gmv_metrics['Annual Volatility'],
+                            'return': gmv_metrics['Annual Return'],
+                            'weights': gmv_weights
+                        }
+                    except Exception as e:
+                        st.warning(f"Could not calculate GMV portfolio: {e}")
+                    
+                    # 2. Max Sharpe Portfolio (Tangent Portfolio)
+                    try:
+                        ef_sharpe = EfficientFrontier(mu, S)
+                        ef_sharpe.max_sharpe()
+                        sharpe_weights = ef_sharpe.clean_weights()
+                        sharpe_returns = calculate_portfolio_returns(clean_returns, sharpe_weights)
+                        sharpe_metrics = calculate_portfolio_metrics(sharpe_returns)
+                        portfolios['Max Sharpe'] = {
+                            'volatility': sharpe_metrics['Annual Volatility'],
+                            'return': sharpe_metrics['Annual Return'],
+                            'weights': sharpe_weights
+                        }
+                    except Exception as e:
+                        st.warning(f"Could not calculate Max Sharpe portfolio: {e}")
+                    
+                    # 3. Max Return Portfolio
                     max_ret_asset = mu.idxmax()
                     max_ret = mu[max_ret_asset]
                     max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                    portfolios['Max Return'] = {
+                        'volatility': max_ret_vol,
+                        'return': max_ret,
+                        'weights': {asset: 1.0 if asset == max_ret_asset else 0.0 for asset in mu.index}
+                    }
                     
-                    # Generate points along the frontier (BACK TO ORIGINAL - 100 POINTS!)
-                    target_returns = np.linspace(min_vol_ret, max_ret, 100)
-                    ef_points = []
+                    # 4. Efficient Value Portfolio (Equal Weight)
+                    try:
+                        n_assets = len(clean_returns.columns)
+                        equal_weights = {asset: 1.0/n_assets for asset in clean_returns.columns}
+                        equal_returns = calculate_portfolio_returns(clean_returns, equal_weights)
+                        equal_metrics = calculate_portfolio_metrics(equal_returns)
+                        portfolios['EV Portfolio'] = {
+                            'volatility': equal_metrics['Annual Volatility'],
+                            'return': equal_metrics['Annual Return'],
+                            'weights': equal_weights
+                        }
+                    except Exception as e:
+                        st.warning(f"Could not calculate EV portfolio: {e}")
                     
-                    for target_ret in target_returns:
-                        try:
-                            ef.efficient_return(target_ret)
-                            vol = ef.portfolio_performance()[1]
-                            ef_points.append((target_ret, vol))
-                        except Exception as e:
-                            # Skip this point if optimization fails
-                            continue
+                    # Generate efficient frontier points
+                    if 'GMV' in portfolios and 'Max Return' in portfolios:
+                        min_vol_ret = portfolios['GMV']['return']
+                        max_ret = portfolios['Max Return']['return']
+                        
+                        # Generate points along the frontier (100 POINTS!)
+                        target_returns = np.linspace(min_vol_ret, max_ret, 100)
+                        ef_points = []
+                        
+                        for target_ret in target_returns:
+                            try:
+                                ef.efficient_return(target_ret)
+                                vol = ef.portfolio_performance()[1]
+                                ef_points.append((target_ret, vol))
+                            except Exception as e:
+                                # Skip this point if optimization fails
+                                continue
+                    else:
+                        ef_points = []
                     
                     fig = go.Figure()
                     
-                    # Initialize variables for tangent line calculation
+                    # Initialize variables for CML calculation
                     ef_vols = []
                     ef_rets = []
                     
@@ -890,7 +971,9 @@ def main():
                             line=dict(color='#1f77b4', width=2)
                         ))
                     else:
-                        st.warning("Could not generate efficient frontier points. This may happen with limited data or extreme market conditions.")
+                        st.warning("Could not generate efficient frontier points due to Streamlit Cloud timeout constraints.")
+                        st.info("💡 **Solution**: Run this application locally for full efficient frontier functionality.")
+                        st.info("📱 **Local Command**: `streamlit run app.py`")
                     
                     # Plot individual assets
                     for ticker in selected_tickers:
@@ -918,82 +1001,107 @@ def main():
                         marker=dict(size=15, color='red', symbol='star')
                     ))
                     
-                    # Add free return line tangent to Sharpe ratio point
-                    if optimization_goal == "Max Sharpe":
-                        # Calculate Sharpe ratio portfolio for tangent line
-                        try:
-                            ef_sharpe = EfficientFrontier(mu, S)
-                            ef_sharpe.max_sharpe()
-                            sharpe_weights = ef_sharpe.clean_weights()
+                    # Plot key portfolios
+                    portfolio_colors = {
+                        'GMV': 'purple',
+                        'Max Sharpe': 'green', 
+                        'Max Return': 'orange',
+                        'EV Portfolio': 'brown'
+                    }
+                    
+                    portfolio_symbols = {
+                        'GMV': 'diamond',
+                        'Max Sharpe': 'star',
+                        'Max Return': 'triangle-up',
+                        'EV Portfolio': 'square'
+                    }
+                    
+                    for portfolio_name, portfolio_data in portfolios.items():
+                        if portfolio_name in portfolio_colors:
+                            fig.add_trace(go.Scatter(
+                                x=[portfolio_data['volatility']],
+                                y=[portfolio_data['return']],
+                                mode='markers',
+                                name=portfolio_name,
+                                marker=dict(
+                                    size=12,
+                                    color=portfolio_colors[portfolio_name],
+                                    symbol=portfolio_symbols[portfolio_name]
+                                )
+                            ))
+                    
+                    # Plot Capital Market Line (CML) if Max Sharpe portfolio exists
+                    if 'Max Sharpe' in portfolios:
+                        sharpe_vol = portfolios['Max Sharpe']['volatility']
+                        sharpe_ret = portfolios['Max Sharpe']['return']
+                        
+                        # Calculate CML points - start from risk-free rate and go tangent to Max Sharpe portfolio
+                        if sharpe_vol > 0:
+                            # Calculate slope of CML (tangent line)
+                            slope = (sharpe_ret - risk_free_rate) / sharpe_vol
                             
-                            # Calculate Sharpe portfolio metrics
-                            sharpe_returns = calculate_portfolio_returns(clean_returns, sharpe_weights)
-                            sharpe_metrics = calculate_portfolio_metrics(sharpe_returns)
-                            sharpe_vol = sharpe_metrics['Annual Volatility']
-                            sharpe_ret = sharpe_metrics['Annual Return']
-                            
-                            # Risk-free rate (using 3-month Treasury yield as approximation)
-                            risk_free_rate = 0.02  # 2% annual rate
-                            
-                            # Calculate tangent line points
-                            # Line goes from (0, risk_free_rate) to (sharpe_vol, sharpe_ret)
-                            # Extend line to x-axis limit for better visualization
+                            # CML should start from (0, risk_free_rate) and go through (sharpe_vol, sharpe_ret)
+                            # Extend it a bit beyond the Max Sharpe portfolio for better visualization
                             if ef_vols and len(ef_vols) > 0:
                                 max_vol = max(ef_vols)
                             else:
                                 max_vol = sharpe_vol * 1.5
                             
-                            # Calculate slope of tangent line (avoid division by zero)
-                            if sharpe_vol > 0:
-                                slope = (sharpe_ret - risk_free_rate) / sharpe_vol
-                                
-                                # Generate points for tangent line
-                                x_tangent = [0, max_vol]
-                                y_tangent = [risk_free_rate, risk_free_rate + slope * max_vol]
-                            else:
-                                # Fallback if sharpe_vol is zero or negative
-                                x_tangent = [0, max_vol]
-                                y_tangent = [risk_free_rate, risk_free_rate]
-                            
-                            # Plot tangent line
-                            fig.add_trace(go.Scatter(
-                                x=x_tangent,
-                                y=y_tangent,
-                                mode='lines',
-                                name='Capital Allocation Line (Tangent)',
-                                line=dict(color='green', width=2, dash='dash'),
-                                showlegend=True
-                            ))
-                            
-                            # Plot Sharpe ratio portfolio point
-                            fig.add_trace(go.Scatter(
-                                x=[sharpe_vol],
-                                y=[sharpe_ret],
-                                mode='markers',
-                                name='Max Sharpe Portfolio',
-                                marker=dict(size=12, color='green', symbol='diamond'),
-                                showlegend=True
-                            ))
-                            
-                            # Add risk-free rate point
-                            fig.add_trace(go.Scatter(
-                                x=[0],
-                                y=[risk_free_rate],
-                                line=dict(color='orange', width=2, dash='dash'),
-                                showlegend=True
-                            ))
-                            
-                        except Exception as e:
-                            st.warning(f"Could not calculate tangent line: {e}")
-                    
-                    fig.update_layout(
-                        title="Efficient Frontier",
-                        xaxis_title="Annual Volatility",
-                        yaxis_title="Annual Return",
-                        height=600
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
+                            # Generate precise CML points - ensure it starts at risk-free rate
+                            x_cml = [0, sharpe_vol, max_vol]
+                            y_cml = [risk_free_rate, sharpe_ret, risk_free_rate + slope * max_vol]
+                        else:
+                            # Fallback if sharpe_vol is zero or negative
+                            x_cml = [0, sharpe_vol]
+                            y_cml = [risk_free_rate, risk_free_rate]
+                        
+                        # Plot CML
+                        fig.add_trace(go.Scatter(
+                            x=x_cml,
+                            y=y_cml,
+                            mode='lines',
+                            name='Capital Market Line (CML)',
+                            line=dict(color='green', width=2, dash='dash'),
+                            showlegend=True
+                        ))
+                        
+                        # Plot risk-free rate point at (0, risk_free_rate)
+                        fig.add_trace(go.Scatter(
+                            x=[0],
+                            y=[risk_free_rate],
+                            mode='markers',
+                            name='Risk-Free Rate',
+                            marker=dict(size=10, color='orange', symbol='circle')
+                        ))
+                        
+                        # Ensure y-axis starts from 0 or below risk-free rate for better CML visibility
+                        y_min = min(risk_free_rate * 0.8, 0) if risk_free_rate > 0 else 0
+                        
+                        fig.update_layout(
+                            title="Efficient Frontier with Key Portfolios",
+                            xaxis_title="Annual Volatility",
+                            yaxis_title="Annual Return",
+                            height=600,
+                            xaxis=dict(range=[0, None]),  # Start x-axis from 0
+                            yaxis=dict(range=[y_min, None])  # Start y-axis from below risk-free rate
+                        )
+                        
+                        # Display the plot
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display portfolio details below the graph
+                        if portfolios:
+                            st.subheader("Portfolio Details")
+                            portfolio_df = pd.DataFrame([
+                                {
+                                    'Portfolio': name,
+                                    'Return': f"{data['return']:.2%}",
+                                    'Volatility': f"{data['volatility']:.2%}",
+                                    'Sharpe Ratio': f"{(data['return'] - risk_free_rate) / data['volatility']:.2f}" if data['volatility'] > 0 else "N/A"
+                                }
+                                for name, data in portfolios.items()
+                            ])
+                            st.dataframe(portfolio_df, use_container_width=True)
                     
                 except Exception as e:
                     # Simple error message for Streamlit Cloud timeouts
