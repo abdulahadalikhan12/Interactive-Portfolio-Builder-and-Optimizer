@@ -88,208 +88,7 @@ ASSET_DATA_AVAILABILITY = {
     'ETH-USD': '2017-11-09'
 }
 
-# Pre-calculated efficient frontier data for common asset combinations
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def get_precalculated_efficient_frontier(selected_tickers, start_date, end_date):
-    """
-    Get pre-calculated efficient frontier data for common asset combinations.
-    This avoids real-time computation issues on Streamlit Cloud.
-    """
-    # Create a unique key for the combination
-    ticker_key = '_'.join(sorted(selected_tickers))
-    date_key = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
-    cache_key = f"{ticker_key}_{date_key}"
-    
-    # Check if we have cached data
-    if hasattr(st.session_state, 'ef_cache') and cache_key in st.session_state.ef_cache:
-        return st.session_state.ef_cache[cache_key]
-    
-    return None
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def calculate_efficient_frontier_data(returns, selected_tickers):
-    """
-    Calculate efficient frontier data with robust error handling.
-    This function is cached to avoid repeated calculations.
-    """
-    try:
-        # Add timeout protection for Streamlit Cloud
-        import time
-        start_time = time.time()
-        max_execution_time = 30  # 30 seconds max
-        
-        # Clean the data
-        clean_returns = returns.copy()
-        clean_returns = clean_returns.replace([np.inf, -np.inf], np.nan)
-        clean_returns = clean_returns.dropna()
-        clean_returns = clean_returns.clip(-0.5, 0.5)
-        
-        if clean_returns.empty or len(clean_returns) < 30:
-            return None
-        
-        # Check timeout
-        if time.time() - start_time > max_execution_time:
-            st.warning("Calculation taking too long, using simplified method...")
-            return None
-        
-        # Calculate expected returns and covariance
-        mu = clean_returns.mean() * 252
-        S = clean_returns.cov() * 252
-        
-        # Validate data
-        if mu.isna().any() or S.isna().any().any():
-            return None
-        
-        # Generate efficient frontier points
-        ef = EfficientFrontier(mu, S)
-        
-        # Get min volatility portfolio
-        try:
-            ef.min_volatility()
-            min_vol_ret = ef.portfolio_performance()[0]
-            min_vol_vol = ef.portfolio_performance()[1]
-        except:
-            return None
-        
-        # Get max return portfolio
-        max_ret_asset = mu.idxmax()
-        max_ret = mu[max_ret_asset]
-        max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
-        
-        # Generate frontier points (optimized for speed)
-        # Use fewer points for faster computation but maintain quality
-        num_points = min(20, len(clean_returns.columns) * 2)  # Reduced for Streamlit Cloud
-        target_returns = np.linspace(min_vol_ret, max_ret, num_points)
-        ef_points = []
-        
-        # Add progress tracking for better user experience
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        successful_points = 0
-        for i, target_ret in enumerate(target_returns):
-            # Check timeout every few iterations
-            if i % 5 == 0 and time.time() - start_time > max_execution_time:
-                st.warning("Calculation timeout reached, using available points...")
-                break
-                
-            try:
-                status_text.text(f"Calculating point {i+1}/{num_points}...")
-                ef.efficient_return(target_ret)
-                vol = ef.portfolio_performance()[1]
-                ef_points.append((target_ret, vol))
-                successful_points += 1
-                progress_bar.progress((i + 1) / num_points)
-            except Exception as e:
-                # Log the specific error for debugging
-                st.debug(f"Failed at point {i+1}: {e}")
-                continue
-        
-        # Clear progress indicators
-        progress_bar.empty()
-        status_text.empty()
-        
-        # Check if we got enough points
-        if successful_points < 2:
-            st.warning(f"Only {successful_points} frontier points generated. This may affect graph quality.")
-        
-        # Calculate individual asset points
-        asset_points = []
-        for ticker in selected_tickers:
-            if ticker in mu.index:
-                asset_return = mu[ticker]
-                asset_vol = np.sqrt(S.loc[ticker, ticker])
-                asset_points.append({
-                    'ticker': ticker,
-                    'return': asset_return,
-                    'volatility': asset_vol
-                })
-        
-        # Calculate Sharpe ratio portfolio
-        sharpe_data = None
-        try:
-            ef_sharpe = EfficientFrontier(mu, S)
-            ef_sharpe.max_sharpe()
-            sharpe_weights = ef_sharpe.clean_weights()
-            sharpe_returns = calculate_portfolio_returns(clean_returns, sharpe_weights)
-            sharpe_metrics = calculate_portfolio_metrics(sharpe_returns)
-            sharpe_data = {
-                'volatility': sharpe_metrics['Annual Volatility'],
-                'return': sharpe_metrics['Annual Return'],
-                'weights': sharpe_weights
-            }
-        except:
-            pass
-        
-        return {
-            'ef_points': ef_points,
-            'asset_points': asset_points,
-            'sharpe_data': sharpe_data,
-            'min_vol_ret': min_vol_ret,
-            'min_vol_vol': min_vol_vol,
-            'max_ret': max_ret,
-            'max_ret_vol': max_ret_vol
-        }
-        
-    except Exception as e:
-        # Fallback: Try simpler calculation method
-        try:
-            st.warning("Full optimization failed, trying simplified method...")
-            
-            # Simple two-point frontier: min vol and max return
-            clean_returns = returns.copy()
-            clean_returns = clean_returns.replace([np.inf, -np.inf], np.nan)
-            clean_returns = clean_returns.dropna()
-            clean_returns = clean_returns.clip(-0.5, 0.5)
-            
-            if clean_returns.empty or len(clean_returns) < 30:
-                return None
-            
-            mu = clean_returns.mean() * 252
-            S = clean_returns.cov() * 252
-            
-            # Simple min vol (equal weight)
-            n_assets = len(clean_returns.columns)
-            equal_weights = {asset: 1.0/n_assets for asset in clean_returns.columns}
-            equal_returns = calculate_portfolio_returns(clean_returns, equal_weights)
-            equal_metrics = calculate_portfolio_metrics(equal_returns)
-            
-            # Max return (100% to highest return asset)
-            max_ret_asset = mu.idxmax()
-            max_ret = mu[max_ret_asset]
-            max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
-            
-            # Create simple frontier with just two points
-            ef_points = [
-                (equal_metrics['Annual Return'], equal_metrics['Annual Volatility']),
-                (max_ret, max_ret_vol)
-            ]
-            
-            # Individual asset points
-            asset_points = []
-            for ticker in selected_tickers:
-                if ticker in mu.index:
-                    asset_return = mu[ticker]
-                    asset_vol = np.sqrt(S.loc[ticker, ticker])
-                    asset_points.append({
-                        'ticker': ticker,
-                        'return': asset_return,
-                        'volatility': asset_vol
-                    })
-            
-            return {
-                'ef_points': ef_points,
-                'asset_points': asset_points,
-                'sharpe_data': None,
-                'min_vol_ret': equal_metrics['Annual Return'],
-                'min_vol_vol': equal_metrics['Annual Volatility'],
-                'max_ret': max_ret,
-                'max_ret_vol': max_ret_vol
-            }
-            
-        except Exception as fallback_error:
-            st.error(f"Both optimization methods failed: {fallback_error}")
-            return None
 
 @st.cache_data
 def fetch_stock_data(tickers, start_date, end_date):
@@ -1018,97 +817,127 @@ def main():
                 # Efficient frontier
                 st.subheader("Efficient Frontier")
                 
-                # Show loading message
-                with st.spinner("Generating efficient frontier... This may take a moment for complex portfolios."):
+                try:
+                    # Use the same robust cleaning for efficient frontier
+                    clean_returns = returns.copy()
+                    clean_returns = clean_returns.replace([np.inf, -np.inf], np.nan)
+                    clean_returns = clean_returns.dropna()
+                    clean_returns = clean_returns.clip(-0.5, 0.5)  # Clip returns to ±50%
+                    
+                    if clean_returns.empty:
+                        st.error("No valid data available for efficient frontier.")
+                        return
+                    
+                    # Check if we have enough data for optimization
+                    if len(clean_returns) < 30:
+                        st.error("Insufficient data for efficient frontier. Need at least 30 days of data.")
+                        return
+                    
+                    # Generate efficient frontier points using sample covariance
+                    mu = clean_returns.mean() * 252  # Annualize manually
+                    S = clean_returns.cov() * 252  # Annualize
+                    
+                    # Validate expected returns and covariance matrix
+                    if mu.isna().any() or S.isna().any().any():
+                        st.error("Invalid values detected in expected returns or covariance matrix.")
+                        return
+                    
+                    ef = EfficientFrontier(mu, S)
+                    
+                    # Generate efficient frontier points
+                    # Get min and max volatility for the frontier
                     try:
-                        # Use pre-calculated efficient frontier data
-                        st.info(f"Calculating efficient frontier for {len(selected_tickers)} assets...")
-                        ef_data = calculate_efficient_frontier_data(returns, selected_tickers)
-                        
-                        if ef_data is None:
-                            st.error("Could not generate efficient frontier data. This may happen with limited data or extreme market conditions.")
-                            st.info("Try selecting different assets or a longer time period.")
-                            return
-                        
-                        # Debug information
-                        st.success(f"✅ Efficient frontier data generated successfully!")
-                        st.info(f"📊 Frontier points: {len(ef_data['ef_points']) if ef_data['ef_points'] else 0}")
-                        st.info(f"🏢 Asset points: {len(ef_data['asset_points'])}")
-                        
-                        # Create the plot
-                        fig = go.Figure()
-                        
-                        # Initialize variables for tangent line calculation
-                        ef_vols = []
-                        ef_rets = []
-                        
-                        # Plot efficient frontier
-                        if ef_data['ef_points'] and len(ef_data['ef_points']) >= 2:
-                            ef_vols = [point[1] for point in ef_data['ef_points']]
-                            ef_rets = [point[0] for point in ef_data['ef_points']]
-                            
-                            # If we have enough points, plot as line
-                            if len(ef_vols) >= 3:
-                                fig.add_trace(go.Scatter(
-                                    x=ef_vols,
-                                    y=ef_rets,
-                                    mode='lines',
-                                    name='Efficient Frontier',
-                                    line=dict(color='#1f77b4', width=2)
-                                ))
-                            else:
-                                # If few points, plot as markers
-                                fig.add_trace(go.Scatter(
-                                    x=ef_vols,
-                                    y=ef_rets,
-                                    mode='markers',
-                                    name='Efficient Frontier Points',
-                                    marker=dict(color='#1f77b4', size=8)
-                                ))
-                        else:
-                            st.warning("Could not generate efficient frontier points. This may happen with limited data or extreme market conditions.")
-                            # Create a simple line from min vol to max return
-                            if ef_data['min_vol_vol'] and ef_data['max_ret_vol']:
-                                fig.add_trace(go.Scatter(
-                                    x=[ef_data['min_vol_vol'], ef_data['max_ret_vol']],
-                                    y=[ef_data['min_vol_ret'], ef_data['max_ret']],
-                                    mode='lines',
-                                    name='Simple Frontier',
-                                    line=dict(color='#1f77b4', width=2, dash='dash')
-                                ))
-                        
-                        # Plot individual assets
-                        for asset in ef_data['asset_points']:
+                        min_vol = ef.min_volatility()
+                        min_vol_ret = ef.portfolio_performance()[0]
+                        min_vol_vol = ef.portfolio_performance()[1]
+                    except Exception as e:
+                        st.error(f"Error calculating minimum volatility portfolio: {e}")
+                        return
+                    
+                    # Get max return portfolio (100% allocation to highest return asset)
+                    max_ret_asset = mu.idxmax()
+                    max_ret = mu[max_ret_asset]
+                    max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                    
+                    # Generate points along the frontier (BACK TO ORIGINAL - 100 POINTS!)
+                    target_returns = np.linspace(min_vol_ret, max_ret, 100)
+                    ef_points = []
+                    
+                    for target_ret in target_returns:
+                        try:
+                            ef.efficient_return(target_ret)
+                            vol = ef.portfolio_performance()[1]
+                            ef_points.append((target_ret, vol))
+                        except Exception as e:
+                            # Skip this point if optimization fails
+                            continue
+                    
+                    fig = go.Figure()
+                    
+                    # Initialize variables for tangent line calculation
+                    ef_vols = []
+                    ef_rets = []
+                    
+                    # Plot efficient frontier
+                    if ef_points and len(ef_points) > 0:
+                        ef_vols = [point[1] for point in ef_points]
+                        ef_rets = [point[0] for point in ef_points]
+                        fig.add_trace(go.Scatter(
+                            x=ef_vols,
+                            y=ef_rets,
+                            mode='lines',
+                            name='Efficient Frontier',
+                            line=dict(color='#1f77b4', width=2)
+                        ))
+                    else:
+                        st.warning("Could not generate efficient frontier points. This may happen with limited data or extreme market conditions.")
+                    
+                    # Plot individual assets
+                    for ticker in selected_tickers:
+                        if ticker in mu.index:
+                            asset_return = mu[ticker]
+                            asset_vol = np.sqrt(S.loc[ticker, ticker])
                             fig.add_trace(go.Scatter(
-                                x=[asset['volatility']],
-                                y=[asset['return']],
+                                x=[asset_vol],
+                                y=[asset_return],
                                 mode='markers+text',
-                                name=asset['ticker'],
-                                text=[asset['ticker']],
+                                name=ticker,
+                                text=[ticker],
                                 textposition="top center",
                                 marker=dict(size=10)
                             ))
-                        
-                        # Plot optimal portfolio
-                        optimal_vol = optimal_metrics['Annual Volatility']
-                        optimal_ret = optimal_metrics['Annual Return']
-                        fig.add_trace(go.Scatter(
-                            x=[optimal_vol],
-                            y=[optimal_ret],
-                            mode='markers',
-                            name='Optimal Portfolio',
-                            marker=dict(size=15, color='red', symbol='star')
-                        ))
-                        
-                        # Add free return line tangent to Sharpe ratio point
-                        if optimization_goal == "Max Sharpe" and ef_data['sharpe_data']:
-                            sharpe_vol = ef_data['sharpe_data']['volatility']
-                            sharpe_ret = ef_data['sharpe_data']['return']
+                    
+                    # Plot optimal portfolio
+                    optimal_vol = optimal_metrics['Annual Volatility']
+                    optimal_ret = optimal_metrics['Annual Return']
+                    fig.add_trace(go.Scatter(
+                        x=[optimal_vol],
+                        y=[optimal_ret],
+                        mode='markers',
+                        name='Optimal Portfolio',
+                        marker=dict(size=15, color='red', symbol='star')
+                    ))
+                    
+                    # Add free return line tangent to Sharpe ratio point
+                    if optimization_goal == "Max Sharpe":
+                        # Calculate Sharpe ratio portfolio for tangent line
+                        try:
+                            ef_sharpe = EfficientFrontier(mu, S)
+                            ef_sharpe.max_sharpe()
+                            sharpe_weights = ef_sharpe.clean_weights()
                             
-                            # Risk-free rate
-                            risk_free_rate = 0.02
+                            # Calculate Sharpe portfolio metrics
+                            sharpe_returns = calculate_portfolio_returns(clean_returns, sharpe_weights)
+                            sharpe_metrics = calculate_portfolio_metrics(sharpe_returns)
+                            sharpe_vol = sharpe_metrics['Annual Volatility']
+                            sharpe_ret = sharpe_metrics['Annual Return']
+                            
+                            # Risk-free rate (using 3-month Treasury yield as approximation)
+                            risk_free_rate = 0.02  # 2% annual rate
                             
                             # Calculate tangent line points
+                            # Line goes from (0, risk_free_rate) to (sharpe_vol, sharpe_ret)
+                            # Extend line to x-axis limit for better visualization
                             if ef_vols and len(ef_vols) > 0:
                                 max_vol = max(ef_vols)
                             else:
@@ -1150,57 +979,44 @@ def main():
                             fig.add_trace(go.Scatter(
                                 x=[0],
                                 y=[risk_free_rate],
-                                mode='markers',
-                                name='Risk-Free Rate',
-                                marker=dict(size=10, color='orange', symbol='circle'),
+                                line=dict(color='orange', width=2, dash='dash'),
                                 showlegend=True
                             ))
-                        
-                        fig.update_layout(
-                            title="Efficient Frontier",
-                            xaxis_title="Annual Volatility",
-                            yaxis_title="Annual Return",
-                            height=600
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Store in cache for future use
-                        if not hasattr(st.session_state, 'ef_cache'):
-                            st.session_state.ef_cache = {}
-                        
-                        ticker_key = '_'.join(sorted(selected_tickers))
-                        date_key = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
-                        cache_key = f"{ticker_key}_{date_key}"
-                        st.session_state.ef_cache[cache_key] = ef_data
-                        
-                    except Exception as e:
-                        st.error(f"Error generating efficient frontier: {e}")
-                        st.info("This may happen with limited data or extreme market conditions. Try selecting different assets or a longer time period.")
-                        
-                        # Show debug information
-                        st.error("Debug Information:")
-                        st.error(f"Selected tickers: {selected_tickers}")
-                        st.error(f"Returns shape: {returns.shape}")
-                        st.error(f"Date range: {start_date} to {end_date}")
-                        
-                        # Try to show a simple plot anyway
-                        try:
-                            fig = go.Figure()
-                            fig.add_annotation(
-                                text="Efficient Frontier could not be generated",
-                                xref="paper", yref="paper",
-                                x=0.5, y=0.5, showarrow=False
-                            )
-                            fig.update_layout(
-                                title="Efficient Frontier (Error)",
-                                xaxis_title="Annual Volatility",
-                                yaxis_title="Annual Return",
-                                height=400
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                        except:
-                            st.error("Could not display any chart.")
+                            
+                        except Exception as e:
+                            st.warning(f"Could not calculate tangent line: {e}")
+                    
+                    fig.update_layout(
+                        title="Efficient Frontier",
+                        xaxis_title="Annual Volatility",
+                        yaxis_title="Annual Return",
+                        height=600
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                except Exception as e:
+                    # Simple error message for Streamlit Cloud timeouts
+                    st.error("🚨 **Streamlit Cloud Timeout Error**")
+                    st.error("The efficient frontier calculation is taking too long and has timed out.")
+                    st.info("💡 **Solution**: Run this application locally for full functionality.")
+                    st.info("📱 **Local Command**: `streamlit run app.py`")
+                    
+                    # Show a simple placeholder chart
+                    fig = go.Figure()
+                    fig.add_annotation(
+                        text="Efficient Frontier Unavailable<br>Due to Streamlit Cloud Timeout<br><br>Run Locally for Full Features",
+                        xref="paper", yref="paper",
+                        x=0.5, y=0.5, showarrow=False,
+                        font=dict(size=16, color="red")
+                    )
+                    fig.update_layout(
+                        title="Efficient Frontier (Streamlit Cloud Timeout)",
+                        xaxis_title="Annual Volatility",
+                        yaxis_title="Annual Return",
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
     
     # Tab 4: Risk Analysis
     with tab4:
