@@ -113,6 +113,11 @@ def calculate_efficient_frontier_data(returns, selected_tickers):
     This function is cached to avoid repeated calculations.
     """
     try:
+        # Add timeout protection for Streamlit Cloud
+        import time
+        start_time = time.time()
+        max_execution_time = 30  # 30 seconds max
+        
         # Clean the data
         clean_returns = returns.copy()
         clean_returns = clean_returns.replace([np.inf, -np.inf], np.nan)
@@ -120,6 +125,11 @@ def calculate_efficient_frontier_data(returns, selected_tickers):
         clean_returns = clean_returns.clip(-0.5, 0.5)
         
         if clean_returns.empty or len(clean_returns) < 30:
+            return None
+        
+        # Check timeout
+        if time.time() - start_time > max_execution_time:
+            st.warning("Calculation taking too long, using simplified method...")
             return None
         
         # Calculate expected returns and covariance
@@ -148,7 +158,7 @@ def calculate_efficient_frontier_data(returns, selected_tickers):
         
         # Generate frontier points (optimized for speed)
         # Use fewer points for faster computation but maintain quality
-        num_points = min(30, len(clean_returns.columns) * 3)  # Adaptive point count
+        num_points = min(20, len(clean_returns.columns) * 2)  # Reduced for Streamlit Cloud
         target_returns = np.linspace(min_vol_ret, max_ret, num_points)
         ef_points = []
         
@@ -156,19 +166,32 @@ def calculate_efficient_frontier_data(returns, selected_tickers):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
+        successful_points = 0
         for i, target_ret in enumerate(target_returns):
+            # Check timeout every few iterations
+            if i % 5 == 0 and time.time() - start_time > max_execution_time:
+                st.warning("Calculation timeout reached, using available points...")
+                break
+                
             try:
                 status_text.text(f"Calculating point {i+1}/{num_points}...")
                 ef.efficient_return(target_ret)
                 vol = ef.portfolio_performance()[1]
                 ef_points.append((target_ret, vol))
+                successful_points += 1
                 progress_bar.progress((i + 1) / num_points)
-            except:
+            except Exception as e:
+                # Log the specific error for debugging
+                st.debug(f"Failed at point {i+1}: {e}")
                 continue
         
         # Clear progress indicators
         progress_bar.empty()
         status_text.empty()
+        
+        # Check if we got enough points
+        if successful_points < 2:
+            st.warning(f"Only {successful_points} frontier points generated. This may affect graph quality.")
         
         # Calculate individual asset points
         asset_points = []
@@ -999,6 +1022,7 @@ def main():
                 with st.spinner("Generating efficient frontier... This may take a moment for complex portfolios."):
                     try:
                         # Use pre-calculated efficient frontier data
+                        st.info(f"Calculating efficient frontier for {len(selected_tickers)} assets...")
                         ef_data = calculate_efficient_frontier_data(returns, selected_tickers)
                         
                         if ef_data is None:
@@ -1006,22 +1030,52 @@ def main():
                             st.info("Try selecting different assets or a longer time period.")
                             return
                         
+                        # Debug information
+                        st.success(f"✅ Efficient frontier data generated successfully!")
+                        st.info(f"📊 Frontier points: {len(ef_data['ef_points']) if ef_data['ef_points'] else 0}")
+                        st.info(f"🏢 Asset points: {len(ef_data['asset_points'])}")
+                        
                         # Create the plot
                         fig = go.Figure()
                         
+                        # Initialize variables for tangent line calculation
+                        ef_vols = []
+                        ef_rets = []
+                        
                         # Plot efficient frontier
-                        if ef_data['ef_points'] and len(ef_data['ef_points']) > 0:
+                        if ef_data['ef_points'] and len(ef_data['ef_points']) >= 2:
                             ef_vols = [point[1] for point in ef_data['ef_points']]
                             ef_rets = [point[0] for point in ef_data['ef_points']]
-                            fig.add_trace(go.Scatter(
-                                x=ef_vols,
-                                y=ef_rets,
-                                mode='lines',
-                                name='Efficient Frontier',
-                                line=dict(color='#1f77b4', width=2)
-                            ))
+                            
+                            # If we have enough points, plot as line
+                            if len(ef_vols) >= 3:
+                                fig.add_trace(go.Scatter(
+                                    x=ef_vols,
+                                    y=ef_rets,
+                                    mode='lines',
+                                    name='Efficient Frontier',
+                                    line=dict(color='#1f77b4', width=2)
+                                ))
+                            else:
+                                # If few points, plot as markers
+                                fig.add_trace(go.Scatter(
+                                    x=ef_vols,
+                                    y=ef_rets,
+                                    mode='markers',
+                                    name='Efficient Frontier Points',
+                                    marker=dict(color='#1f77b4', size=8)
+                                ))
                         else:
                             st.warning("Could not generate efficient frontier points. This may happen with limited data or extreme market conditions.")
+                            # Create a simple line from min vol to max return
+                            if ef_data['min_vol_vol'] and ef_data['max_ret_vol']:
+                                fig.add_trace(go.Scatter(
+                                    x=[ef_data['min_vol_vol'], ef_data['max_ret_vol']],
+                                    y=[ef_data['min_vol_ret'], ef_data['max_ret']],
+                                    mode='lines',
+                                    name='Simple Frontier',
+                                    line=dict(color='#1f77b4', width=2, dash='dash')
+                                ))
                         
                         # Plot individual assets
                         for asset in ef_data['asset_points']:
@@ -1123,6 +1177,30 @@ def main():
                     except Exception as e:
                         st.error(f"Error generating efficient frontier: {e}")
                         st.info("This may happen with limited data or extreme market conditions. Try selecting different assets or a longer time period.")
+                        
+                        # Show debug information
+                        st.error("Debug Information:")
+                        st.error(f"Selected tickers: {selected_tickers}")
+                        st.error(f"Returns shape: {returns.shape}")
+                        st.error(f"Date range: {start_date} to {end_date}")
+                        
+                        # Try to show a simple plot anyway
+                        try:
+                            fig = go.Figure()
+                            fig.add_annotation(
+                                text="Efficient Frontier could not be generated",
+                                xref="paper", yref="paper",
+                                x=0.5, y=0.5, showarrow=False
+                            )
+                            fig.update_layout(
+                                title="Efficient Frontier (Error)",
+                                xaxis_title="Annual Volatility",
+                                yaxis_title="Annual Return",
+                                height=400
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        except:
+                            st.error("Could not display any chart.")
     
     # Tab 4: Risk Analysis
     with tab4:
