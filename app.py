@@ -831,35 +831,49 @@ def main():
                     S = clean_returns.cov() * 252  # Annualize
                     ef = EfficientFrontier(mu, S)
                     
+                    # Initialize variables for efficient frontier
+                    ef_vols = []
+                    ef_rets = []
+                    
                     # Generate efficient frontier points
                     # Get min and max volatility for the frontier
-                    min_vol = ef.min_volatility()
-                    min_vol_ret = ef.portfolio_performance()[0]
-                    min_vol_vol = ef.portfolio_performance()[1]
-                    
-                    # Get max return portfolio (100% allocation to highest return asset)
-                    max_ret_asset = mu.idxmax()
-                    max_ret = mu[max_ret_asset]
-                    max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
-                    
-                    # Generate points along the frontier
-                    target_returns = np.linspace(min_vol_ret, max_ret, 100)
-                    ef_points = []
-                    
-                    for target_ret in target_returns:
-                        try:
-                            ef.efficient_return(target_ret)
-                            vol = ef.portfolio_performance()[1]
-                            ef_points.append((target_ret, vol))
-                        except:
-                            continue
+                    try:
+                        min_vol = ef.min_volatility()
+                        min_vol_ret = ef.portfolio_performance()[0]
+                        min_vol_vol = ef.portfolio_performance()[1]
+                        
+                        # Get max return portfolio (100% allocation to highest return asset)
+                        max_ret_asset = mu.idxmax()
+                        max_ret = mu[max_ret_asset]
+                        max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                        
+                        # Generate points along the frontier
+                        target_returns = np.linspace(min_vol_ret, max_ret, 100)
+                        ef_points = []
+                        
+                        for target_ret in target_returns:
+                            try:
+                                ef.efficient_return(target_ret)
+                                vol = ef.portfolio_performance()[1]
+                                ef_points.append((target_ret, vol))
+                            except:
+                                continue
+                        
+                        # Extract volumes and returns for plotting
+                        if ef_points:
+                            ef_vols = [point[1] for point in ef_points]
+                            ef_rets = [point[0] for point in ef_points]
+                        
+                    except Exception as e:
+                        st.warning(f"Could not generate efficient frontier: {e}")
+                        # Set default values if frontier generation fails
+                        ef_vols = []
+                        ef_rets = []
                     
                     fig = go.Figure()
                     
                     # Plot efficient frontier
-                    if ef_points:
-                        ef_vols = [point[1] for point in ef_points]
-                        ef_rets = [point[0] for point in ef_points]
+                    if ef_vols and ef_rets:
                         fig.add_trace(go.Scatter(
                             x=ef_vols,
                             y=ef_rets,
@@ -914,7 +928,10 @@ def main():
                             # Calculate tangent line points
                             # Line goes from (0, risk_free_rate) to (sharpe_vol, sharpe_ret)
                             # Extend line to x-axis limit for better visualization
-                            max_vol = max(ef_vols) if ef_vols else sharpe_vol * 1.5
+                            if ef_vols:
+                                max_vol = max(ef_vols)
+                            else:
+                                max_vol = sharpe_vol * 1.5
                             
                             # Calculate slope of tangent line
                             slope = (sharpe_ret - risk_free_rate) / sharpe_vol
