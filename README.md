@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Interactive Portfolio Analysis & Optimization Dashboard
 
 ## Professional Portfolio Analysis & Optimization Tool
@@ -191,3 +192,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 *This tool is designed for educational and analysis purposes. Always consult with qualified financial professionals before making investment decisions.*
+=======
+# Interactive-Portfolio-Builder-and-Optimizer
+Interactive Portfolio Analysis &amp; Optimization Dashboard built with Streamlit. Features portfolio building, optimization strategies, risk analysis, correlation analysis, and interactive charts using Modern Portfolio Theory and real-time market data.
+>>>>>>> 57cbec893672af00a71ca05e90d1d0d8364e7d07
