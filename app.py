@@ -1136,14 +1136,17 @@ def main():
                                 ef_vols_sorted = ef_vols_clean[sort_idx]
                                 ef_rets_sorted = ef_rets_clean[sort_idx]
                                 
-                                # Optimize for cloud rendering - limit points but maintain curve quality
+                                # Optimize for cloud rendering - limit points but maintain curve quality and FULL RANGE
                                 if len(ef_vols_sorted) > 15:
                                     # Use interpolation to maintain curve smoothness with fewer points
                                     from scipy.interpolate import interp1d
                                     try:
-                                        # Create smooth curve with fewer points
+                                        # Create smooth curve with fewer points BUT preserve full range
                                         f = interp1d(ef_vols_sorted, ef_rets_sorted, kind='cubic', bounds_error=False, fill_value='extrapolate')
-                                        vol_range = np.linspace(ef_vols_sorted.min(), ef_vols_sorted.max(), 15)
+                                        
+                                        # Ensure we include the exact min and max points, then interpolate between
+                                        vol_min, vol_max = ef_vols_sorted.min(), ef_vols_sorted.max()
+                                        vol_range = np.linspace(vol_min, vol_max, 15)
                                         ret_range = f(vol_range)
                                         
                                         # Ensure we have valid interpolated values
@@ -1151,16 +1154,39 @@ def main():
                                         if np.sum(valid_interp) >= 10:
                                             ef_vols_plot = vol_range[valid_interp]
                                             ef_rets_plot = ret_range[valid_interp]
+                                            
+                                            # CRITICAL: Ensure we have the exact min and max points
+                                            if vol_min not in ef_vols_plot:
+                                                ef_vols_plot = np.concatenate([[vol_min], ef_vols_plot])
+                                                ef_rets_plot = np.concatenate([[ef_rets_sorted[0]], ef_rets_plot])
+                                            if vol_max not in ef_vols_plot:
+                                                ef_vols_plot = np.concatenate([ef_vols_plot, [vol_max]])
+                                                ef_rets_plot = np.concatenate([ef_rets_plot, [ef_rets_sorted[-1]]])
+                                            
+                                            # Sort again to maintain order
+                                            sort_idx = np.argsort(ef_vols_plot)
+                                            ef_vols_plot = ef_vols_plot[sort_idx]
+                                            ef_rets_plot = ef_rets_plot[sort_idx]
                                         else:
-                                            # Fallback to original data with fewer points
-                                            step = len(ef_vols_sorted) // 15
+                                            # Fallback to original data with fewer points but preserve ends
+                                            step = max(1, len(ef_vols_sorted) // 15)
                                             ef_vols_plot = ef_vols_sorted[::step]
                                             ef_rets_plot = ef_rets_sorted[::step]
+                                            
+                                            # Ensure we have the end points
+                                            if ef_vols_sorted[-1] not in ef_vols_plot:
+                                                ef_vols_plot = np.append(ef_vols_plot, ef_vols_sorted[-1])
+                                                ef_rets_plot = np.append(ef_rets_plot, ef_rets_sorted[-1])
                                     except:
-                                        # Fallback to simple decimation
-                                        step = len(ef_vols_sorted) // 15
+                                        # Fallback to simple decimation but preserve ends
+                                        step = max(1, len(ef_vols_sorted) // 15)
                                         ef_vols_plot = ef_vols_sorted[::step]
                                         ef_rets_plot = ef_rets_sorted[::step]
+                                        
+                                        # Ensure we have the end points
+                                        if ef_vols_sorted[-1] not in ef_vols_plot:
+                                            ef_vols_plot = np.append(ef_vols_plot, ef_vols_sorted[-1])
+                                            ef_rets_plot = np.append(ef_rets_plot, ef_rets_sorted[-1])
                                 else:
                                     ef_vols_plot = ef_vols_sorted
                                     ef_rets_plot = ef_rets_sorted
@@ -1182,10 +1208,28 @@ def main():
                                 st.info(f"🔍 Plotting data: Volatility range {ef_vols_plot.min():.4f} to {ef_vols_plot.max():.4f}")
                                 st.info(f"🔍 Plotting data: Return range {ef_rets_plot.min():.4f} to {ef_rets_plot.max():.4f}")
                                 
+                                # CRITICAL: Verify that we preserved the full range
+                                original_vol_range = ef_vols_sorted.max() - ef_vols_sorted.min()
+                                plot_vol_range = ef_vols_plot.max() - ef_vols_plot.min()
+                                vol_range_preserved = abs(original_vol_range - plot_vol_range) < 0.001
+                                
+                                original_ret_range = ef_rets_sorted.max() - ef_rets_sorted.min()
+                                plot_ret_range = ef_rets_plot.max() - ef_rets_plot.min()
+                                ret_range_preserved = abs(original_ret_range - plot_ret_range) < 0.001
+                                
+                                if vol_range_preserved and ret_range_preserved:
+                                    st.success(f"✅ Full range preserved: Vol range {original_vol_range:.4f} → {plot_vol_range:.4f}, Ret range {original_ret_range:.4f} → {plot_ret_range:.4f}")
+                                else:
+                                    st.warning(f"⚠️ Range may be truncated: Vol range {original_vol_range:.4f} → {plot_vol_range:.4f}, Ret range {original_ret_range:.4f} → {plot_ret_range:.4f}")
+                                
                                 # Show first few points for verification
                                 if len(ef_vols_plot) > 0:
                                     st.info(f"🔍 First 3 points: Vol=[{ef_vols_plot[:3]}], Ret=[{ef_rets_plot[:3]}]")
                                     st.info(f"🔍 Last 3 points: Vol=[{ef_vols_plot[-3:]}], Ret=[{ef_rets_plot[-3:]}]]")
+                                    
+                                    # Show the exact min and max points
+                                    st.info(f"🔍 Min point: Vol={ef_vols_plot.min():.6f}, Ret={ef_rets_plot.min():.6f}")
+                                    st.info(f"🔍 Max point: Vol={ef_vols_plot.max():.6f}, Ret={ef_rets_plot.max():.6f}")
                                 
                             else:
                                 st.warning("⚠️ Insufficient valid data points for efficient frontier. Generating synthetic curve...")
