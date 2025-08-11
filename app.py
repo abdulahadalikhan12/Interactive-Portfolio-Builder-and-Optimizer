@@ -12,7 +12,12 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import seaborn as sns
 import matplotlib.pyplot as plt
-from pypfopt import EfficientFrontier, risk_models, expected_returns
+try:
+    from pypfopt import EfficientFrontier, risk_models, expected_returns
+except ImportError as e:
+    st.error(f"Failed to import PyPortfolioOpt: {e}")
+    st.error("Please ensure PyPortfolioOpt is properly installed")
+    st.stop()
 from pypfopt.risk_models import CovarianceShrinkage
 
 
@@ -106,8 +111,16 @@ def fetch_stock_data(tickers, start_date, end_date):
         start_str = start_date.strftime('%Y-%m-%d')
         end_str = end_date.strftime('%Y-%m-%d')
         
-        # Download data
-        data = yf.download(tickers, start=start_str, end=end_str, progress=False)
+        # Download data with timeout and better error handling
+        try:
+            data = yf.download(tickers, start=start_str, end=end_str, progress=False, timeout=30)
+        except Exception as download_error:
+            st.warning(f"Download timeout or error, retrying with longer timeout: {download_error}")
+            try:
+                data = yf.download(tickers, start=start_str, end=end_str, progress=False, timeout=60)
+            except Exception as retry_error:
+                st.error(f"Failed to download data after retry: {retry_error}")
+                return None
         
         # Handle different data structures
         if len(tickers) == 1:
@@ -184,6 +197,11 @@ def calculate_portfolio_returns(returns, weights):
     Returns:
         pd.Series: Portfolio returns
     """
+    # Check if weights are valid
+    if not weights or sum(weights.values()) == 0:
+        # Return zero returns if no valid weights
+        return pd.Series(0.0, index=returns.index)
+    
     # Normalize weights to sum to 1
     total_weight = sum(weights.values())
     normalized_weights = {k: v/total_weight for k, v in weights.items()}
@@ -617,115 +635,119 @@ def main():
         
         # Portfolio content (outside of columns to avoid width constraints)
         if st.session_state.get('portfolio_updated', False):
-            # Calculate portfolio returns
-            portfolio_returns = calculate_portfolio_returns(returns, weights)
-            portfolio_metrics = calculate_portfolio_metrics(portfolio_returns)
-            
-            # Display metrics
-            st.subheader("Portfolio Performance Metrics")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric(
-                    "Annual Return",
-                    f"{portfolio_metrics['Annual Return']:.2%}",
-                    help="Annualized portfolio return"
-                )
-            
-            with col2:
-                st.metric(
-                    "Annual Volatility",
-                    f"{portfolio_metrics['Annual Volatility']:.2%}",
-                    help="Annualized portfolio volatility"
-                )
-            
-            with col3:
-                st.metric(
-                    "Sharpe Ratio",
-                    f"{portfolio_metrics['Sharpe Ratio']:.2f}",
-                    help="Risk-adjusted return measure"
-                )
-            
-            with col4:
-                st.metric(
-                    "Max Drawdown",
-                    f"{portfolio_metrics['Max Drawdown']:.2%}",
-                    help="Maximum historical loss from peak"
-                )
-            
-            # Portfolio growth chart
-            st.subheader("Portfolio Growth")
-            cumulative_returns = (1 + portfolio_returns).cumprod()
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=cumulative_returns.index,
-                y=cumulative_returns.values,
-                mode='lines',
-                name='Portfolio',
-                line=dict(color='#1f77b4', width=2)
-            ))
-            
-            fig.update_layout(
-                title="Portfolio Cumulative Returns",
-                xaxis_title="Date",
-                yaxis_title="Cumulative Return",
-                hovermode='x unified',
-                height=500
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Individual asset performance
-            st.subheader("Individual Asset Performance")
-            asset_cumulative = (1 + returns).cumprod()
-            
-            fig2 = go.Figure()
-            for ticker in selected_tickers:
-                fig2.add_trace(go.Scatter(
-                    x=asset_cumulative.index,
-                    y=asset_cumulative[ticker],
+            # Check if weights are valid before calculating
+            if not weights or sum(weights.values()) == 0:
+                st.warning("Please set valid weights for your assets before analyzing the portfolio.")
+            else:
+                # Calculate portfolio returns
+                portfolio_returns = calculate_portfolio_returns(returns, weights)
+                portfolio_metrics = calculate_portfolio_metrics(portfolio_returns)
+                
+                # Display metrics
+                st.subheader("Portfolio Performance Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "Annual Return",
+                        f"{portfolio_metrics['Annual Return']:.2%}",
+                        help="Annualized portfolio return"
+                    )
+                
+                with col2:
+                    st.metric(
+                        "Annual Volatility",
+                        f"{portfolio_metrics['Annual Volatility']:.2%}",
+                        help="Annualized portfolio volatility"
+                    )
+                
+                with col3:
+                    st.metric(
+                        "Sharpe Ratio",
+                        f"{portfolio_metrics['Sharpe Ratio']:.2f}",
+                        help="Risk-adjusted return measure"
+                    )
+                
+                with col4:
+                    st.metric(
+                        "Max Drawdown",
+                        f"{portfolio_metrics['Max Drawdown']:.2%}",
+                        help="Maximum historical loss from peak"
+                    )
+                
+                # Portfolio growth chart
+                st.subheader("Portfolio Growth")
+                cumulative_returns = (1 + portfolio_returns).cumprod()
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=cumulative_returns.index,
+                    y=cumulative_returns.values,
                     mode='lines',
-                    name=ticker
+                    name='Portfolio',
+                    line=dict(color='#1f77b4', width=2)
                 ))
-            
-            fig2.update_layout(
-                title="Individual Asset Performance",
-                xaxis_title="Date",
-                yaxis_title="Cumulative Return",
-                hovermode='x unified',
-                height=500
-            )
-            
-            st.plotly_chart(fig2, use_container_width=True)
-            
-            # Asset Price History
-            st.subheader("Asset Price History")
-            
-            # Create line chart showing historical prices for each asset
-            fig3 = go.Figure()
-            
-            for ticker in selected_tickers:
-                if ticker in data.columns:
-                    fig3.add_trace(go.Scatter(
-                        x=data.index,
-                        y=data[ticker],
+                
+                fig.update_layout(
+                    title="Portfolio Cumulative Returns",
+                    xaxis_title="Date",
+                    yaxis_title="Cumulative Return",
+                    hovermode='x unified',
+                    height=500
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Individual asset performance
+                st.subheader("Individual Asset Performance")
+                asset_cumulative = (1 + returns).cumprod()
+                
+                fig2 = go.Figure()
+                for ticker in selected_tickers:
+                    fig2.add_trace(go.Scatter(
+                        x=asset_cumulative.index,
+                        y=asset_cumulative[ticker],
                         mode='lines',
-                        name=ticker,
-                        line=dict(width=2)
+                        name=ticker
                     ))
-            
-            fig3.update_layout(
-                title="Historical Asset Prices",
-                xaxis_title="Date",
-                yaxis_title="Price ($)",
-                height=400,
-                hovermode='x unified',
-                showlegend=True
-            )
-            
-            st.plotly_chart(fig3, use_container_width=True)
+                
+                fig2.update_layout(
+                    title="Individual Asset Performance",
+                    xaxis_title="Date",
+                    yaxis_title="Cumulative Return",
+                    hovermode='x unified',
+                    height=500
+                )
+                
+                st.plotly_chart(fig2, use_container_width=True)
+                
+                # Asset Price History
+                st.subheader("Asset Price History")
+                
+                # Create line chart showing historical prices for each asset
+                fig3 = go.Figure()
+                
+                for ticker in selected_tickers:
+                    if ticker in data.columns:
+                        fig3.add_trace(go.Scatter(
+                            x=data.index,
+                            y=data[ticker],
+                            mode='lines',
+                            name=ticker,
+                            line=dict(width=2)
+                        ))
+                
+                fig3.update_layout(
+                    title="Historical Asset Prices",
+                    xaxis_title="Date",
+                    yaxis_title="Price ($)",
+                    height=400,
+                    hovermode='x unified',
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig3, use_container_width=True)
     
     # Tab 3: Optimization
     with tab3:
@@ -826,9 +848,53 @@ def main():
                         st.error("No valid data available for efficient frontier.")
                         return
                     
+                    # Check if we have sufficient data for reliable calculations
+                    if len(clean_returns) < 30:
+                        pass
+                    
                     # Generate efficient frontier points using sample covariance
                     mu = clean_returns.mean() * 252  # Annualize manually
                     S = clean_returns.cov() * 252  # Annualize
+                    
+                    # Check for valid covariance matrix
+                    if S.isnull().any().any() or S.isin([np.inf, -np.inf]).any().any():
+                        st.error("Invalid covariance matrix detected. Please try different assets or date range.")
+                        return
+                    
+                    # Check for positive definite covariance matrix
+                    try:
+                        np.linalg.cholesky(S)
+                    except np.linalg.LinAlgError:
+                        pass
+                    
+                    # Additional validation for cloud environment
+                    if mu.isnull().any() or mu.isin([np.inf, -np.inf]).any():
+                        st.error("Invalid expected returns detected. Please try different assets or date range.")
+                        return
+                    
+                    # Check for reasonable values
+                    if (mu.abs() > 2).any():  # Returns > 200% annually are suspicious
+                        pass
+                    
+                    # Additional validation for cloud environment
+                    if S.shape[0] != S.shape[1]:
+                        st.error("Covariance matrix is not square. This indicates a data issue.")
+                        return
+                    
+                    if S.shape[0] < 2:
+                        st.error("Insufficient assets for portfolio optimization. Need at least 2 assets.")
+                        return
+                    
+                    # Additional validation for cloud environment
+                    if clean_returns.shape[1] < 2:
+                        st.error("Insufficient assets for portfolio optimization. Need at least 2 assets.")
+                        return
+                    
+                    # Check for sufficient data points per asset
+                    min_data_points = 20  # Minimum data points needed per asset
+                    if len(clean_returns) < min_data_points:
+                        pass
+                    
                     ef = EfficientFrontier(mu, S)
                     
                     # Initialize variables for efficient frontier
@@ -838,49 +904,125 @@ def main():
                     # Generate efficient frontier points
                     # Get min and max volatility for the frontier
                     try:
-                        min_vol = ef.min_volatility()
-                        min_vol_ret = ef.portfolio_performance()[0]
-                        min_vol_vol = ef.portfolio_performance()[1]
+                        # Try to calculate minimum volatility portfolio
+                        try:
+                            min_vol = ef.min_volatility()
+                            min_vol_ret = ef.portfolio_performance()[0]
+                            min_vol_vol = ef.portfolio_performance()[1]
+                        except Exception as min_vol_error:
+                            # Use fallback values
+                            min_vol_ret = mu.min()
+                            min_vol_vol = np.sqrt(S.min().min())
                         
                         # Get max return portfolio (100% allocation to highest return asset)
-                        max_ret_asset = mu.idxmax()
-                        max_ret = mu[max_ret_asset]
-                        max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                        try:
+                            max_ret_asset = mu.idxmax()
+                            max_ret = mu[max_ret_asset]
+                            max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                        except Exception as max_ret_error:
+                            # Use fallback values
+                            max_ret = mu.max()
+                            max_ret_vol = np.sqrt(S.max().max())
                         
-                        # Generate points along the frontier
-                        target_returns = np.linspace(min_vol_ret, max_ret, 100)
+                        # Generate points along the frontier with more conservative approach
+                        # Use fewer points for cloud environment to avoid memory issues
+                        num_points = min(30, max(10, int((max_ret - min_vol_ret) * 100)))  # Adaptive number of points
+                        target_returns = np.linspace(min_vol_ret, max_ret, num_points)
                         ef_points = []
                         
-                        for target_ret in target_returns:
+                        for i, target_ret in enumerate(target_returns):
                             try:
                                 ef.efficient_return(target_ret)
                                 vol = ef.portfolio_performance()[1]
-                                ef_points.append((target_ret, vol))
-                            except:
+                                # Check for valid numerical values
+                                if np.isfinite(vol) and np.isfinite(target_ret) and vol > 0:
+                                    # Additional validation for cloud environment
+                                    if 0 < vol < 10 and -2 < target_ret < 5:  # Reasonable bounds
+                                        ef_points.append((target_ret, vol))
+                            except Exception as e:
+                                # Skip this point and continue
                                 continue
                         
                         # Extract volumes and returns for plotting
-                        if ef_points:
+                        if ef_points and len(ef_points) >= 2:
                             ef_vols = [point[1] for point in ef_points]
                             ef_rets = [point[0] for point in ef_points]
+                        elif ef_points and len(ef_points) == 1:
+                            ef_vols = [point[1] for point in ef_points]
+                            ef_rets = [point[0] for point in ef_points]
+                        else:
+                            # Fallback: try to generate a simple frontier with just min vol and max return
+                            try:
+                                ef_vols = [min_vol_vol, max_ret_vol]
+                                ef_rets = [min_vol_ret, max_ret]
+                            except Exception as fallback_error:
+                                pass
                         
+                        # Set default values if frontier generation fails
+                        if not ef_vols or not ef_rets:
+                            ef_vols = []
+                            ef_rets = []
+                    
                     except Exception as e:
-                        st.warning(f"Could not generate efficient frontier: {e}")
                         # Set default values if frontier generation fails
                         ef_vols = []
                         ef_rets = []
                     
                     fig = go.Figure()
                     
+
+                    
                     # Plot efficient frontier
-                    if ef_vols and ef_rets:
-                        fig.add_trace(go.Scatter(
-                            x=ef_vols,
-                            y=ef_rets,
-                            mode='lines',
-                            name='Efficient Frontier',
-                            line=dict(color='#1f77b4', width=2)
-                        ))
+                    if ef_vols and ef_rets and len(ef_vols) >= 2 and len(ef_rets) >= 2:
+                        # Ensure data is properly formatted for Plotly
+                        try:
+                            # Convert to numpy arrays and check for valid data
+                            ef_vols_array = np.array(ef_vols, dtype=float)
+                            ef_rets_array = np.array(ef_rets, dtype=float)
+                            
+                            # Remove any invalid values
+                            valid_mask = np.isfinite(ef_vols_array) & np.isfinite(ef_rets_array) & (ef_vols_array > 0)
+                            if np.sum(valid_mask) >= 2:
+                                ef_vols_clean = ef_vols_array[valid_mask]
+                                ef_rets_clean = ef_rets_array[valid_mask]
+                                
+                                # Additional data validation for cloud environment
+                                if len(ef_vols_clean) != len(ef_rets_clean):
+                                    st.error("Mismatch in volatility and return array lengths")
+                                    return
+                                
+                                # Check for reasonable value ranges
+                                if np.any(ef_vols_clean > 10) or np.any(ef_rets_clean > 5):
+                                    ef_vols_clean = np.clip(ef_vols_clean, 0, 10)
+                                    ef_rets_clean = np.clip(ef_rets_clean, -2, 5)
+                                
+                                # Ensure data is sorted for proper line plotting
+                                sort_idx = np.argsort(ef_vols_clean)
+                                ef_vols_sorted = ef_vols_clean[sort_idx]
+                                ef_rets_sorted = ef_rets_clean[sort_idx]
+                                
+                                # Limit number of points for cloud rendering to avoid memory issues
+                                if len(ef_vols_sorted) > 20:
+                                    step = len(ef_vols_sorted) // 20
+                                    ef_vols_limited = ef_vols_sorted[::step]
+                                    ef_rets_limited = ef_rets_sorted[::step]
+                                else:
+                                    ef_vols_limited = ef_vols_sorted
+                                    ef_rets_limited = ef_rets_sorted
+                                
+                                fig.add_trace(go.Scatter(
+                                    x=ef_vols_limited,
+                                    y=ef_rets_limited,
+                                    mode='lines',
+                                    name='Efficient Frontier',
+                                    line=dict(color='#1f77b4', width=2)
+                                ))
+                            else:
+                                pass
+                        except Exception as plot_error:
+                            st.error(f"Error plotting efficient frontier: {plot_error}")
+                    else:
+                        pass
                     
                     # Plot individual assets
                     for ticker in selected_tickers:
@@ -971,16 +1113,32 @@ def main():
                             ))
                             
                         except Exception as e:
-                            st.warning(f"Could not calculate tangent line: {e}")
+                            pass
                     
                     fig.update_layout(
                         title="Efficient Frontier",
                         xaxis_title="Annual Volatility",
                         yaxis_title="Annual Return",
-                        height=600
+                        height=600,
+                        # Add additional layout options for better cloud rendering
+                        margin=dict(l=50, r=50, t=80, b=50),
+                        showlegend=True,
+                        legend=dict(x=0.02, y=0.98),
+                        # Ensure proper axis configuration
+                        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
+                        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray')
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Render the plot directly
+                    try:
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as plot_render_error:
+                        st.error(f"Error rendering plot: {plot_render_error}")
+                        # Simple fallback: show data as text
+                        if ef_vols and ef_rets and len(ef_vols) >= 2:
+                            st.write("Efficient Frontier Data:")
+                            for i, (vol, ret) in enumerate(zip(ef_vols, ef_rets)):
+                                st.write(f"Point {i+1}: Volatility = {vol:.4f}, Return = {ret:.4f}")
                     
                 except Exception as e:
                     st.error(f"Error generating efficient frontier: {e}")
