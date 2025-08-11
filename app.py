@@ -535,9 +535,38 @@ def main():
         - Consider different time periods for analysis to understand how your portfolio performs in various market conditions
         - Use the risk analysis tab to stress test your portfolio against historical crisis scenarios
         
+        ### Implementation Details & Future Improvements
+        
+        **Current Implementation**: This tool implements a basic Markowitz Modern Portfolio Theory (MPT) framework using the PyPortfolioOpt library. The current version includes:
+        
+        - **Basic Optimization**: Standard mean-variance optimization with sample covariance estimation
+        - **Efficient Frontier**: 100-point frontier generation using historical data
+        - **Portfolio Types**: GMV (Global Minimum Variance), Max Sharpe, Max Return, and Equal Weight portfolios
+        - **Risk Metrics**: Standard deviation, Sharpe ratio, maximum drawdown, and basic VaR
+        
+        **Areas for Enhancement**: While functional, this implementation could be improved with:
+        
+        - **Advanced Risk Models**: Implement Black-Litterman, factor models, or regime-switching models
+        - **Robust Estimation**: Use shrinkage estimators, robust covariance methods, or time-varying parameters
+        - **Transaction Costs**: Include trading fees, bid-ask spreads, and rebalancing constraints
+        - **Alternative Risk Measures**: Conditional VaR (CVaR), Omega ratio, or downside deviation
+        - **Multi-Period Optimization**: Dynamic asset allocation with rebalancing strategies
+        - **Machine Learning**: Incorporate ML-based return forecasting and risk modeling
+        - **ESG Integration**: Add environmental, social, and governance factors to optimization
+        - **Real-time Data**: Connect to live market feeds for real-time portfolio monitoring
+        
+        **Technical Limitations**: The current version has some constraints:
+        
+        - Sample covariance estimation may not capture true risk relationships
+        - Historical returns may not predict future performance
+        - No consideration of market microstructure or liquidity constraints
+        - Limited to long-only positions (no short selling)
+        
         ### About This Tool
         
         This application combines modern portfolio theory with practical investment analysis tools. It uses the PyPortfolioOpt library for optimization algorithms and Yahoo Finance for real-time market data. Whether you're a beginner investor learning about portfolio construction or an experienced analyst looking for advanced optimization capabilities, this tool provides the insights you need to make informed investment decisions.
+        
+        **Note**: This is a basic implementation of MPT. For production use, consider more sophisticated risk models, robust estimation techniques, and comprehensive backtesting frameworks.
         """)
     
     # Check if assets are selected
