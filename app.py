@@ -1110,11 +1110,22 @@ def main():
                             ef_rets_array = np.array(ef_rets, dtype=float)
                             
                             # Remove any invalid values and ensure minimum data quality
+                            # Use more realistic bounds for financial data
                             valid_mask = (np.isfinite(ef_vols_array) & 
                                         np.isfinite(ef_rets_array) & 
                                         (ef_vols_array > 0) & 
-                                        (ef_vols_array < 5) &  # Reasonable volatility bounds
-                                        (ef_rets_array > -1) & (ef_rets_array < 3))  # Reasonable return bounds
+                                        (ef_vols_array < 2) &  # Volatility up to 200% (more realistic)
+                                        (ef_rets_array > -1) & (ef_rets_array < 2))  # Returns up to 200% (more realistic)
+                            
+                            # Debug: show what's being filtered
+                            st.info(f"🔍 Data validation: {len(ef_vols_array)} total points, {np.sum(valid_mask)} valid points")
+                            if np.sum(valid_mask) < len(ef_vols_array):
+                                st.warning(f"⚠️ Filtered out {len(ef_vols_array) - np.sum(valid_mask)} points due to bounds")
+                                # Show the bounds that caused filtering
+                                vol_bounds = (ef_vols_array > 0) & (ef_vols_array < 2)
+                                ret_bounds = (ef_rets_array > -1) & (ef_rets_array < 2)
+                                st.info(f"Volatility bounds: {np.sum(vol_bounds)}/{len(ef_vols_array)} points valid")
+                                st.info(f"Return bounds: {np.sum(ret_bounds)}/{len(ef_rets_array)} points valid")
                             
                             if np.sum(valid_mask) >= 3:  # Require at least 3 points for good curve
                                 ef_vols_clean = ef_vols_array[valid_mask]
@@ -1167,6 +1178,15 @@ def main():
                                 # Add some debug info for cloud troubleshooting
                                 st.success(f"✅ Efficient Frontier plotted with {len(ef_vols_plot)} points")
                                 
+                                # Debug: show the actual data being plotted
+                                st.info(f"🔍 Plotting data: Volatility range {ef_vols_plot.min():.4f} to {ef_vols_plot.max():.4f}")
+                                st.info(f"🔍 Plotting data: Return range {ef_rets_plot.min():.4f} to {ef_rets_plot.max():.4f}")
+                                
+                                # Show first few points for verification
+                                if len(ef_vols_plot) > 0:
+                                    st.info(f"🔍 First 3 points: Vol=[{ef_vols_plot[:3]}], Ret=[{ef_rets_plot[:3]}]")
+                                    st.info(f"🔍 Last 3 points: Vol=[{ef_vols_plot[-3:]}], Ret=[{ef_rets_plot[-3:]}]]")
+                                
                             else:
                                 st.warning("⚠️ Insufficient valid data points for efficient frontier. Generating synthetic curve...")
                                 # Generate a basic synthetic curve as last resort
@@ -1188,6 +1208,31 @@ def main():
                                 
                         except Exception as plot_error:
                             st.error(f"Error plotting efficient frontier: {plot_error}")
+                            
+                            # Try a simple fallback plot
+                            try:
+                                st.warning("🔄 Attempting simple fallback plot...")
+                                # Create a basic plot with minimal processing
+                                fig_fallback = go.Figure()
+                                fig_fallback.add_trace(go.Scatter(
+                                    x=ef_vols,
+                                    y=ef_rets,
+                                    mode='lines+markers',
+                                    name='Efficient Frontier (Fallback)',
+                                    line=dict(color='red', width=2),
+                                    marker=dict(size=4)
+                                ))
+                                fig_fallback.update_layout(
+                                    title="Efficient Frontier (Fallback)",
+                                    xaxis_title="Annual Volatility",
+                                    yaxis_title="Annual Return",
+                                    height=600
+                                )
+                                st.plotly_chart(fig_fallback, use_container_width=True)
+                                st.success("✅ Fallback plot rendered successfully")
+                            except Exception as fallback_error:
+                                st.error(f"Fallback plot also failed: {fallback_error}")
+                            
                             # Last resort: show data as text
                             st.write("Efficient Frontier Data (Raw):")
                             for i, (vol, ret) in enumerate(zip(ef_vols, ef_rets)):
