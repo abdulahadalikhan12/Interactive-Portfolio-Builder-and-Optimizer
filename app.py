@@ -901,127 +901,200 @@ def main():
                     ef_vols = []
                     ef_rets = []
                     
-                    # Generate efficient frontier points with robust cloud-friendly approach
+                    # Generate efficient frontier points with hybrid approach: heavy calculation first, light fallback if needed
                     try:
-                        # Show progress indicator for cloud environment
-                        with st.spinner("Calculating efficient frontier..."):
-                            # Get min and max volatility for the frontier
-                            try:
-                                # Calculate minimum volatility portfolio
-                                ef_min_vol = EfficientFrontier(mu, S)
-                                ef_min_vol.min_volatility()
-                                min_vol_ret, min_vol_vol, _ = ef_min_vol.portfolio_performance()
+                        # First attempt: Heavy but accurate calculation (like the original)
+                        st.info("🔄 Attempting full efficient frontier calculation...")
+                        
+                        # Get min and max volatility for the frontier
+                        try:
+                            # Calculate minimum volatility portfolio
+                            ef_min_vol = EfficientFrontier(mu, S)
+                            ef_min_vol.min_volatility()
+                            min_vol_ret, min_vol_vol, _ = ef_min_vol.portfolio_performance()
+                            
+                            # Validate the results
+                            if not (np.isfinite(min_vol_ret) and np.isfinite(min_vol_vol) and min_vol_vol > 0):
+                                raise ValueError("Invalid min vol results")
                                 
-                                # Validate the results
-                                if not (np.isfinite(min_vol_ret) and np.isfinite(min_vol_vol) and min_vol_vol > 0):
-                                    raise ValueError("Invalid min vol results")
-                                    
-                            except Exception as min_vol_error:
-                                # Use fallback values based on data
-                                min_vol_ret = mu.min()
-                                min_vol_vol = np.sqrt(S.min().min())
-                                if not (np.isfinite(min_vol_ret) and np.isfinite(min_vol_vol) and min_vol_vol > 0):
-                                    min_vol_ret = 0.05  # Default 5% return
-                                    min_vol_vol = 0.15  # Default 15% volatility
+                        except Exception as min_vol_error:
+                            # Use fallback values based on data
+                            min_vol_ret = mu.min()
+                            min_vol_vol = np.sqrt(S.min().min())
+                            if not (np.isfinite(min_vol_ret) and np.isfinite(min_vol_vol) and min_vol_vol > 0):
+                                min_vol_ret = 0.05  # Default 5% return
+                                min_vol_vol = 0.15  # Default 15% volatility
+                        
+                        # Get max return portfolio
+                        try:
+                            max_ret_asset = mu.idxmax()
+                            max_ret = mu[max_ret_asset]
+                            max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
                             
-                            # Get max return portfolio
-                            try:
-                                max_ret_asset = mu.idxmax()
-                                max_ret = mu[max_ret_asset]
-                                max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                            # Validate the results
+                            if not (np.isfinite(max_ret) and np.isfinite(max_ret_vol) and max_ret_vol > 0):
+                                raise ValueError("Invalid max return results")
                                 
-                                # Validate the results
-                                if not (np.isfinite(max_ret) and np.isfinite(max_ret_vol) and max_ret_vol > 0):
-                                    raise ValueError("Invalid max return results")
+                        except Exception as max_ret_error:
+                            # Use fallback values
+                            max_ret = mu.max()
+                            max_ret_vol = np.sqrt(S.max().max())
+                            if not (np.isfinite(max_ret) and np.isfinite(max_ret_vol) and max_ret_vol > 0):
+                                max_ret = 0.25  # Default 25% return
+                                max_ret_vol = 0.30  # Default 30% volatility
+                        
+                        # Ensure we have valid bounds
+                        if min_vol_ret >= max_ret:
+                            min_vol_ret = max_ret * 0.5
+                        
+                        # PHASE 1: Try heavy calculation (like the original) with timeout protection
+                        heavy_ef_points = []
+                        heavy_success = False
+                        
+                        try:
+                            with st.spinner("🔄 Phase 1: Heavy calculation (full accuracy)..."):
+                                # Use more points for accuracy like the original
+                                num_points = min(40, max(15, int((max_ret - min_vol_ret) * 100)))
+                                target_returns = np.linspace(min_vol_ret, max_ret, num_points)
+                                
+                                # Progress tracking
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+                                
+                                # Add timeout protection for cloud environment
+                                import time
+                                start_time = time.time()
+                                max_calculation_time = 45  # 45 seconds max for heavy calculation
+                                
+                                for i, target_ret in enumerate(target_returns):
+                                    # Check timeout
+                                    if time.time() - start_time > max_calculation_time:
+                                        st.warning(f"⏰ Heavy calculation timeout after {max_calculation_time}s. Switching to light mode...")
+                                        break
                                     
-                            except Exception as max_ret_error:
-                                # Use fallback values
-                                max_ret = mu.max()
-                                max_ret_vol = np.sqrt(S.max().max())
-                                if not (np.isfinite(max_ret) and np.isfinite(max_ret_vol) and max_ret_vol > 0):
-                                    max_ret = 0.25  # Default 25% return
-                                    max_ret_vol = 0.30  # Default 30% volatility
-                            
-                            # Ensure we have valid bounds
-                            if min_vol_ret >= max_ret:
-                                min_vol_ret = max_ret * 0.5
-                            
-                            # Generate efficient frontier points with cloud-optimized approach
-                            num_points = min(25, max(8, int((max_ret - min_vol_ret) * 50)))  # Conservative point count
-                            target_returns = np.linspace(min_vol_ret, max_ret, num_points)
-                            ef_points = []
-                            
-                            # Add progress bar for cloud environment
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
-                            
-                            for i, target_ret in enumerate(target_returns):
-                                try:
-                                    # Update progress
-                                    progress = (i + 1) / len(target_returns)
-                                    progress_bar.progress(progress)
-                                    status_text.text(f"Calculating point {i+1}/{len(target_returns)}")
-                                    
-                                    # Create fresh EfficientFrontier instance for each calculation
-                                    ef_temp = EfficientFrontier(mu, S)
-                                    ef_temp.efficient_return(target_ret)
-                                    vol = ef_temp.portfolio_performance()[1]
-                                    
-                                    # Validate the result
-                                    if (np.isfinite(vol) and np.isfinite(target_ret) and 
-                                        vol > 0 and 0 < vol < 5 and -1 < target_ret < 3):
-                                        ef_points.append((target_ret, vol))
+                                    try:
+                                        # Update progress
+                                        progress = (i + 1) / len(target_returns)
+                                        progress_bar.progress(progress)
+                                        status_text.text(f"🔄 Heavy calculation: {i+1}/{len(target_returns)} (⏱️ {int(time.time() - start_time)}s)")
                                         
-                                except Exception as e:
-                                    # Skip this point and continue
-                                    continue
+                                        # Use the original approach: modify existing ef instance
+                                        ef.efficient_return(target_ret)
+                                        vol = ef.portfolio_performance()[1]
+                                        
+                                        # Validate the result
+                                        if (np.isfinite(vol) and np.isfinite(target_ret) and 
+                                            vol > 0 and 0 < vol < 10 and -2 < target_ret < 5):
+                                            heavy_ef_points.append((target_ret, vol))
+                                            
+                                    except Exception as e:
+                                        # Skip this point and continue
+                                        continue
+                                
+                                # Clear progress indicators
+                                progress_bar.empty()
+                                status_text.empty()
+                                
+                                # Check if heavy calculation was successful
+                                if heavy_ef_points and len(heavy_ef_points) >= 5:
+                                    heavy_success = True
+                                    ef_vols = [point[1] for point in heavy_ef_points]
+                                    ef_rets = [point[0] for point in heavy_ef_points]
+                                    
+                                    # Sort by volatility for proper line plotting
+                                    sorted_pairs = sorted(zip(ef_vols, ef_rets))
+                                    ef_vols, ef_rets = zip(*sorted_pairs)
+                                    
+                                    st.success(f"✅ Heavy calculation successful! Generated {len(ef_vols)} points with full accuracy.")
+                                else:
+                                    st.info("ℹ️ Heavy calculation incomplete or timed out. Will try light calculation...")
+                                
+                        except Exception as heavy_error:
+                            st.warning(f"⚠️ Heavy calculation failed: {str(heavy_error)}")
+                            heavy_success = False
+                        
+                        # PHASE 2: Light fallback if heavy calculation failed or was incomplete
+                        if not heavy_success:
+                            st.info("🔄 Phase 2: Light calculation (cloud-optimized)...")
                             
-                            # Clear progress indicators
-                            progress_bar.empty()
-                            status_text.empty()
-                            
-                            # Extract volumes and returns for plotting
-                            if ef_points and len(ef_points) >= 3:
-                                ef_vols = [point[1] for point in ef_points]
-                                ef_rets = [point[0] for point in ef_points]
-                                
-                                # Sort by volatility for proper line plotting
-                                sorted_pairs = sorted(zip(ef_vols, ef_rets))
-                                ef_vols, ef_rets = zip(*sorted_pairs)
-                                
-                            elif ef_points and len(ef_points) >= 2:
-                                ef_vols = [point[1] for point in ef_points]
-                                ef_rets = [point[0] for point in ef_points]
-                                
-                            else:
-                                # Generate a synthetic efficient frontier if calculation fails
-                                # This creates a realistic curve based on Modern Portfolio Theory
-                                st.warning("Efficient frontier calculation incomplete. Generating synthetic frontier...")
-                                
-                                # Create synthetic frontier with realistic shape
-                                vol_range = np.linspace(min_vol_vol, max_ret_vol, 15)
-                                # Use quadratic function to create realistic efficient frontier curve
-                                # Higher risk should have diminishing returns
+                            try:
+                                with st.spinner("🔄 Light calculation in progress..."):
+                                    # Light calculation with fewer points
+                                    num_points = min(20, max(8, int((max_ret - min_vol_ret) * 50)))
+                                    target_returns = np.linspace(min_vol_ret, max_ret, num_points)
+                                    light_ef_points = []
+                                    
+                                    # Progress tracking
+                                    progress_bar = st.progress(0)
+                                    status_text = st.empty()
+                                    
+                                    for i, target_ret in enumerate(target_returns):
+                                        try:
+                                            # Update progress
+                                            progress = (i + 1) / len(target_returns)
+                                            progress_bar.progress(progress)
+                                            status_text.text(f"🔄 Light calculation: {i+1}/{len(target_returns)}")
+                                            
+                                            # Create fresh instance for each calculation
+                                            ef_temp = EfficientFrontier(mu, S)
+                                            ef_temp.efficient_return(target_ret)
+                                            vol = ef_temp.portfolio_performance()[1]
+                                            
+                                            # Validate the result
+                                            if (np.isfinite(vol) and np.isfinite(target_ret) and 
+                                                vol > 0 and 0 < vol < 5 and -1 < target_ret < 3):
+                                                light_ef_points.append((target_ret, vol))
+                                                
+                                        except Exception as e:
+                                            # Skip this point and continue
+                                            continue
+                                    
+                                    # Clear progress indicators
+                                    progress_bar.empty()
+                                    status_text.empty()
+                                    
+                                    # Extract volumes and returns for plotting
+                                    if light_ef_points and len(light_ef_points) >= 3:
+                                        ef_vols = [point[1] for point in light_ef_points]
+                                        ef_rets = [point[0] for point in light_ef_points]
+                                        
+                                        # Sort by volatility for proper line plotting
+                                        sorted_pairs = sorted(zip(ef_vols, ef_rets))
+                                        ef_vols, ef_rets = zip(*sorted_pairs)
+                                        
+                                        st.success(f"✅ Light calculation successful! Generated {len(ef_vols)} points.")
+                                        
+                                    else:
+                                        # Generate synthetic frontier as last resort
+                                        st.warning("⚠️ Light calculation incomplete. Generating synthetic frontier...")
+                                        
+                                        # Create synthetic frontier with realistic shape
+                                        vol_range = np.linspace(min_vol_vol, max_ret_vol, 15)
+                                        ef_rets = []
+                                        for vol in vol_range:
+                                            # Quadratic relationship for realistic curve
+                                            a = -0.1  # Concavity parameter
+                                            b = (max_ret - min_vol_ret) / (max_ret_vol - min_vol_vol)
+                                            c = min_vol_ret
+                                            ret = a * (vol - min_vol_vol)**2 + b * (vol - min_vol_vol) + c
+                                            ef_rets.append(max(ret, min_vol_ret))
+                                        
+                                        ef_vols = vol_range.tolist()
+                                        st.info("ℹ️ Using synthetic frontier as fallback.")
+                                        
+                            except Exception as light_error:
+                                st.error(f"❌ Light calculation also failed: {str(light_error)}")
+                                ef_vols = []
                                 ef_rets = []
-                                for vol in vol_range:
-                                    # Quadratic relationship: return = a*vol^2 + b*vol + c
-                                    # where a < 0 to create concave shape
-                                    a = -0.1  # Concavity parameter
-                                    b = (max_ret - min_vol_ret) / (max_ret_vol - min_vol_vol)
-                                    c = min_vol_ret
-                                    ret = a * (vol - min_vol_vol)**2 + b * (vol - min_vol_vol) + c
-                                    ef_rets.append(max(ret, min_vol_ret))  # Ensure minimum return
-                                
-                                ef_vols = vol_range.tolist()
                         
                         # Final validation
                         if not ef_vols or not ef_rets or len(ef_vols) < 2 or len(ef_rets) < 2:
-                            st.error("Failed to generate efficient frontier. Please try again.")
+                            st.error("❌ All calculation methods failed. Please try again.")
                             ef_vols = []
                             ef_rets = []
                     
                     except Exception as e:
-                        st.error(f"Error in efficient frontier calculation: {str(e)}")
+                        st.error(f"❌ Error in efficient frontier calculation: {str(e)}")
                         ef_vols = []
                         ef_rets = []
                     
