@@ -12,12 +12,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import seaborn as sns
 import matplotlib.pyplot as plt
-try:
-    from pypfopt import EfficientFrontier, risk_models, expected_returns
-except ImportError as e:
-    st.error(f"Failed to import PyPortfolioOpt: {e}")
-    st.error("Please ensure PyPortfolioOpt is properly installed")
-    st.stop()
+from pypfopt import EfficientFrontier, risk_models, expected_returns
 from pypfopt.risk_models import CovarianceShrinkage
 
 
@@ -111,16 +106,8 @@ def fetch_stock_data(tickers, start_date, end_date):
         start_str = start_date.strftime('%Y-%m-%d')
         end_str = end_date.strftime('%Y-%m-%d')
         
-        # Download data with timeout and better error handling
-        try:
-            data = yf.download(tickers, start=start_str, end=end_str, progress=False, timeout=30)
-        except Exception as download_error:
-            st.warning(f"Download timeout or error, retrying with longer timeout: {download_error}")
-            try:
-                data = yf.download(tickers, start=start_str, end=end_str, progress=False, timeout=60)
-            except Exception as retry_error:
-                st.error(f"Failed to download data after retry: {retry_error}")
-                return None
+        # Download data
+        data = yf.download(tickers, start=start_str, end=end_str, progress=False)
         
         # Handle different data structures
         if len(tickers) == 1:
@@ -197,11 +184,6 @@ def calculate_portfolio_returns(returns, weights):
     Returns:
         pd.Series: Portfolio returns
     """
-    # Check if weights are valid
-    if not weights or sum(weights.values()) == 0:
-        # Return zero returns if no valid weights
-        return pd.Series(0.0, index=returns.index)
-    
     # Normalize weights to sum to 1
     total_weight = sum(weights.values())
     normalized_weights = {k: v/total_weight for k, v in weights.items()}
@@ -635,119 +617,115 @@ def main():
         
         # Portfolio content (outside of columns to avoid width constraints)
         if st.session_state.get('portfolio_updated', False):
-            # Check if weights are valid before calculating
-            if not weights or sum(weights.values()) == 0:
-                st.warning("Please set valid weights for your assets before analyzing the portfolio.")
-            else:
-                # Calculate portfolio returns
-                portfolio_returns = calculate_portfolio_returns(returns, weights)
-                portfolio_metrics = calculate_portfolio_metrics(portfolio_returns)
-                
-                # Display metrics
-                st.subheader("Portfolio Performance Metrics")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric(
-                        "Annual Return",
-                        f"{portfolio_metrics['Annual Return']:.2%}",
-                        help="Annualized portfolio return"
-                    )
-                
-                with col2:
-                    st.metric(
-                        "Annual Volatility",
-                        f"{portfolio_metrics['Annual Volatility']:.2%}",
-                        help="Annualized portfolio volatility"
-                    )
-                
-                with col3:
-                    st.metric(
-                        "Sharpe Ratio",
-                        f"{portfolio_metrics['Sharpe Ratio']:.2f}",
-                        help="Risk-adjusted return measure"
-                    )
-                
-                with col4:
-                    st.metric(
-                        "Max Drawdown",
-                        f"{portfolio_metrics['Max Drawdown']:.2%}",
-                        help="Maximum historical loss from peak"
-                    )
-                
-                # Portfolio growth chart
-                st.subheader("Portfolio Growth")
-                cumulative_returns = (1 + portfolio_returns).cumprod()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=cumulative_returns.index,
-                    y=cumulative_returns.values,
+            # Calculate portfolio returns
+            portfolio_returns = calculate_portfolio_returns(returns, weights)
+            portfolio_metrics = calculate_portfolio_metrics(portfolio_returns)
+            
+            # Display metrics
+            st.subheader("Portfolio Performance Metrics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Annual Return",
+                    f"{portfolio_metrics['Annual Return']:.2%}",
+                    help="Annualized portfolio return"
+                )
+            
+            with col2:
+                st.metric(
+                    "Annual Volatility",
+                    f"{portfolio_metrics['Annual Volatility']:.2%}",
+                    help="Annualized portfolio volatility"
+                )
+            
+            with col3:
+                st.metric(
+                    "Sharpe Ratio",
+                    f"{portfolio_metrics['Sharpe Ratio']:.2f}",
+                    help="Risk-adjusted return measure"
+                )
+            
+            with col4:
+                st.metric(
+                    "Max Drawdown",
+                    f"{portfolio_metrics['Max Drawdown']:.2%}",
+                    help="Maximum historical loss from peak"
+                )
+            
+            # Portfolio growth chart
+            st.subheader("Portfolio Growth")
+            cumulative_returns = (1 + portfolio_returns).cumprod()
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=cumulative_returns.index,
+                y=cumulative_returns.values,
+                mode='lines',
+                name='Portfolio',
+                line=dict(color='#1f77b4', width=2)
+            ))
+            
+            fig.update_layout(
+                title="Portfolio Cumulative Returns",
+                xaxis_title="Date",
+                yaxis_title="Cumulative Return",
+                hovermode='x unified',
+                height=500
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Individual asset performance
+            st.subheader("Individual Asset Performance")
+            asset_cumulative = (1 + returns).cumprod()
+            
+            fig2 = go.Figure()
+            for ticker in selected_tickers:
+                fig2.add_trace(go.Scatter(
+                    x=asset_cumulative.index,
+                    y=asset_cumulative[ticker],
                     mode='lines',
-                    name='Portfolio',
-                    line=dict(color='#1f77b4', width=2)
+                    name=ticker
                 ))
-                
-                fig.update_layout(
-                    title="Portfolio Cumulative Returns",
-                    xaxis_title="Date",
-                    yaxis_title="Cumulative Return",
-                    hovermode='x unified',
-                    height=500
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Individual asset performance
-                st.subheader("Individual Asset Performance")
-                asset_cumulative = (1 + returns).cumprod()
-                
-                fig2 = go.Figure()
-                for ticker in selected_tickers:
-                    fig2.add_trace(go.Scatter(
-                        x=asset_cumulative.index,
-                        y=asset_cumulative[ticker],
+            
+            fig2.update_layout(
+                title="Individual Asset Performance",
+                xaxis_title="Date",
+                yaxis_title="Cumulative Return",
+                hovermode='x unified',
+                height=500
+            )
+            
+            st.plotly_chart(fig2, use_container_width=True)
+            
+            # Asset Price History
+            st.subheader("Asset Price History")
+            
+            # Create line chart showing historical prices for each asset
+            fig3 = go.Figure()
+            
+            for ticker in selected_tickers:
+                if ticker in data.columns:
+                    fig3.add_trace(go.Scatter(
+                        x=data.index,
+                        y=data[ticker],
                         mode='lines',
-                        name=ticker
+                        name=ticker,
+                        line=dict(width=2)
                     ))
-                
-                fig2.update_layout(
-                    title="Individual Asset Performance",
-                    xaxis_title="Date",
-                    yaxis_title="Cumulative Return",
-                    hovermode='x unified',
-                    height=500
-                )
-                
-                st.plotly_chart(fig2, use_container_width=True)
-                
-                # Asset Price History
-                st.subheader("Asset Price History")
-                
-                # Create line chart showing historical prices for each asset
-                fig3 = go.Figure()
-                
-                for ticker in selected_tickers:
-                    if ticker in data.columns:
-                        fig3.add_trace(go.Scatter(
-                            x=data.index,
-                            y=data[ticker],
-                            mode='lines',
-                            name=ticker,
-                            line=dict(width=2)
-                        ))
-                
-                fig3.update_layout(
-                    title="Historical Asset Prices",
-                    xaxis_title="Date",
-                    yaxis_title="Price ($)",
-                    height=400,
-                    hovermode='x unified',
-                    showlegend=True
-                )
-                
-                st.plotly_chart(fig3, use_container_width=True)
+            
+            fig3.update_layout(
+                title="Historical Asset Prices",
+                xaxis_title="Date",
+                yaxis_title="Price ($)",
+                height=400,
+                hovermode='x unified',
+                showlegend=True
+            )
+            
+            st.plotly_chart(fig3, use_container_width=True)
     
     # Tab 3: Optimization
     with tab3:
@@ -848,425 +826,69 @@ def main():
                         st.error("No valid data available for efficient frontier.")
                         return
                     
-                    # Check if we have sufficient data for reliable calculations
+                    # Check if we have enough data for optimization
                     if len(clean_returns) < 30:
-                        pass
+                        st.error("Insufficient data for efficient frontier. Need at least 30 days of data.")
+                        return
                     
                     # Generate efficient frontier points using sample covariance
                     mu = clean_returns.mean() * 252  # Annualize manually
                     S = clean_returns.cov() * 252  # Annualize
                     
-                    # Check for valid covariance matrix
-                    if S.isnull().any().any() or S.isin([np.inf, -np.inf]).any().any():
-                        st.error("Invalid covariance matrix detected. Please try different assets or date range.")
+                    # Validate expected returns and covariance matrix
+                    if mu.isna().any() or S.isna().any().any():
+                        st.error("Invalid values detected in expected returns or covariance matrix.")
                         return
-                    
-                    # Check for positive definite covariance matrix
-                    try:
-                        np.linalg.cholesky(S)
-                    except np.linalg.LinAlgError:
-                        pass
-                    
-                    # Additional validation for cloud environment
-                    if mu.isnull().any() or mu.isin([np.inf, -np.inf]).any():
-                        st.error("Invalid expected returns detected. Please try different assets or date range.")
-                        return
-                    
-                    # Check for reasonable values
-                    if (mu.abs() > 2).any():  # Returns > 200% annually are suspicious
-                        pass
-                    
-                    # Additional validation for cloud environment
-                    if S.shape[0] != S.shape[1]:
-                        st.error("Covariance matrix is not square. This indicates a data issue.")
-                        return
-                    
-                    if S.shape[0] < 2:
-                        st.error("Insufficient assets for portfolio optimization. Need at least 2 assets.")
-                        return
-                    
-                    # Additional validation for cloud environment
-                    if clean_returns.shape[1] < 2:
-                        st.error("Insufficient assets for portfolio optimization. Need at least 2 assets.")
-                        return
-                    
-                    # Check for sufficient data points per asset
-                    min_data_points = 20  # Minimum data points needed per asset
-                    if len(clean_returns) < min_data_points:
-                        pass
                     
                     ef = EfficientFrontier(mu, S)
                     
-                    # Initialize variables for efficient frontier
-                    ef_vols = []
-                    ef_rets = []
-                    
-                    # Generate efficient frontier points with hybrid approach: heavy calculation first, light fallback if needed
+                    # Generate efficient frontier points
+                    # Get min and max volatility for the frontier
                     try:
-                        # First attempt: Heavy but accurate calculation (like the original)
-                        st.info("🔄 Attempting full efficient frontier calculation...")
-                        
-                        # Get min and max volatility for the frontier
-                        try:
-                            # Calculate minimum volatility portfolio
-                            ef_min_vol = EfficientFrontier(mu, S)
-                            ef_min_vol.min_volatility()
-                            min_vol_ret, min_vol_vol, _ = ef_min_vol.portfolio_performance()
-                            
-                            # Validate the results
-                            if not (np.isfinite(min_vol_ret) and np.isfinite(min_vol_vol) and min_vol_vol > 0):
-                                raise ValueError("Invalid min vol results")
-                                
-                        except Exception as min_vol_error:
-                            # Use fallback values based on data
-                            min_vol_ret = mu.min()
-                            min_vol_vol = np.sqrt(S.min().min())
-                            if not (np.isfinite(min_vol_ret) and np.isfinite(min_vol_vol) and min_vol_vol > 0):
-                                min_vol_ret = 0.05  # Default 5% return
-                                min_vol_vol = 0.15  # Default 15% volatility
-                        
-                        # Get max return portfolio
-                        try:
-                            max_ret_asset = mu.idxmax()
-                            max_ret = mu[max_ret_asset]
-                            max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
-                            
-                            # Validate the results
-                            if not (np.isfinite(max_ret) and np.isfinite(max_ret_vol) and max_ret_vol > 0):
-                                raise ValueError("Invalid max return results")
-                                
-                        except Exception as max_ret_error:
-                            # Use fallback values
-                            max_ret = mu.max()
-                            max_ret_vol = np.sqrt(S.max().max())
-                            if not (np.isfinite(max_ret) and np.isfinite(max_ret_vol) and max_ret_vol > 0):
-                                max_ret = 0.25  # Default 25% return
-                                max_ret_vol = 0.30  # Default 30% volatility
-                        
-                        # Ensure we have valid bounds
-                        if min_vol_ret >= max_ret:
-                            min_vol_ret = max_ret * 0.5
-                        
-                        # PHASE 1: Try heavy calculation (like the original) with timeout protection
-                        heavy_ef_points = []
-                        heavy_success = False
-                        
-                        try:
-                            with st.spinner("🔄 Phase 1: Heavy calculation (full accuracy)..."):
-                                # Use more points for accuracy like the original
-                                num_points = min(40, max(15, int((max_ret - min_vol_ret) * 100)))
-                                target_returns = np.linspace(min_vol_ret, max_ret, num_points)
-                                
-                                # Progress tracking
-                                progress_bar = st.progress(0)
-                                status_text = st.empty()
-                                
-                                # Add timeout protection for cloud environment
-                                import time
-                                start_time = time.time()
-                                max_calculation_time = 45  # 45 seconds max for heavy calculation
-                                
-                                for i, target_ret in enumerate(target_returns):
-                                    # Check timeout
-                                    if time.time() - start_time > max_calculation_time:
-                                        st.warning(f"⏰ Heavy calculation timeout after {max_calculation_time}s. Switching to light mode...")
-                                        break
-                                    
-                                    try:
-                                        # Update progress
-                                        progress = (i + 1) / len(target_returns)
-                                        progress_bar.progress(progress)
-                                        status_text.text(f"🔄 Heavy calculation: {i+1}/{len(target_returns)} (⏱️ {int(time.time() - start_time)}s)")
-                                        
-                                        # Use the original approach: modify existing ef instance
-                                        ef.efficient_return(target_ret)
-                                        vol = ef.portfolio_performance()[1]
-                                        
-                                        # Validate the result
-                                        if (np.isfinite(vol) and np.isfinite(target_ret) and 
-                                            vol > 0 and 0 < vol < 10 and -2 < target_ret < 5):
-                                            heavy_ef_points.append((target_ret, vol))
-                                            
-                                    except Exception as e:
-                                        # Skip this point and continue
-                                        continue
-                                
-                                # Clear progress indicators
-                                progress_bar.empty()
-                                status_text.empty()
-                                
-                                # Check if heavy calculation was successful
-                                if heavy_ef_points and len(heavy_ef_points) >= 5:
-                                    heavy_success = True
-                                    ef_vols = [point[1] for point in heavy_ef_points]
-                                    ef_rets = [point[0] for point in heavy_ef_points]
-                                    
-                                    # Sort by volatility for proper line plotting
-                                    sorted_pairs = sorted(zip(ef_vols, ef_rets))
-                                    ef_vols, ef_rets = zip(*sorted_pairs)
-                                    
-                                    st.success(f"✅ Heavy calculation successful! Generated {len(ef_vols)} points with full accuracy.")
-                                else:
-                                    st.info("ℹ️ Heavy calculation incomplete or timed out. Will try light calculation...")
-                                
-                        except Exception as heavy_error:
-                            st.warning(f"⚠️ Heavy calculation failed: {str(heavy_error)}")
-                            heavy_success = False
-                        
-                        # PHASE 2: Light fallback if heavy calculation failed or was incomplete
-                        if not heavy_success:
-                            st.info("🔄 Phase 2: Light calculation (cloud-optimized)...")
-                            
-                            try:
-                                with st.spinner("🔄 Light calculation in progress..."):
-                                    # Light calculation with fewer points
-                                    num_points = min(20, max(8, int((max_ret - min_vol_ret) * 50)))
-                                    target_returns = np.linspace(min_vol_ret, max_ret, num_points)
-                                    light_ef_points = []
-                                    
-                                    # Progress tracking
-                                    progress_bar = st.progress(0)
-                                    status_text = st.empty()
-                                    
-                                    for i, target_ret in enumerate(target_returns):
-                                        try:
-                                            # Update progress
-                                            progress = (i + 1) / len(target_returns)
-                                            progress_bar.progress(progress)
-                                            status_text.text(f"🔄 Light calculation: {i+1}/{len(target_returns)}")
-                                            
-                                            # Create fresh instance for each calculation
-                                            ef_temp = EfficientFrontier(mu, S)
-                                            ef_temp.efficient_return(target_ret)
-                                            vol = ef_temp.portfolio_performance()[1]
-                                            
-                                            # Validate the result
-                                            if (np.isfinite(vol) and np.isfinite(target_ret) and 
-                                                vol > 0 and 0 < vol < 5 and -1 < target_ret < 3):
-                                                light_ef_points.append((target_ret, vol))
-                                                
-                                        except Exception as e:
-                                            # Skip this point and continue
-                                            continue
-                                    
-                                    # Clear progress indicators
-                                    progress_bar.empty()
-                                    status_text.empty()
-                                    
-                                    # Extract volumes and returns for plotting
-                                    if light_ef_points and len(light_ef_points) >= 3:
-                                        ef_vols = [point[1] for point in light_ef_points]
-                                        ef_rets = [point[0] for point in light_ef_points]
-                                        
-                                        # Sort by volatility for proper line plotting
-                                        sorted_pairs = sorted(zip(ef_vols, ef_rets))
-                                        ef_vols, ef_rets = zip(*sorted_pairs)
-                                        
-                                        st.success(f"✅ Light calculation successful! Generated {len(ef_vols)} points.")
-                                        
-                                    else:
-                                        # Generate synthetic frontier as last resort
-                                        st.warning("⚠️ Light calculation incomplete. Generating synthetic frontier...")
-                                        
-                                        # Create synthetic frontier with realistic shape
-                                        vol_range = np.linspace(min_vol_vol, max_ret_vol, 15)
-                                        ef_rets = []
-                                        for vol in vol_range:
-                                            # Quadratic relationship for realistic curve
-                                            a = -0.1  # Concavity parameter
-                                            b = (max_ret - min_vol_ret) / (max_ret_vol - min_vol_vol)
-                                            c = min_vol_ret
-                                            ret = a * (vol - min_vol_vol)**2 + b * (vol - min_vol_vol) + c
-                                            ef_rets.append(max(ret, min_vol_ret))
-                                        
-                                        ef_vols = vol_range.tolist()
-                                        st.info("ℹ️ Using synthetic frontier as fallback.")
-                                        
-                            except Exception as light_error:
-                                st.error(f"❌ Light calculation also failed: {str(light_error)}")
-                                ef_vols = []
-                                ef_rets = []
-                        
-                        # Final validation
-                        if not ef_vols or not ef_rets or len(ef_vols) < 2 or len(ef_rets) < 2:
-                            st.error("❌ All calculation methods failed. Please try again.")
-                            ef_vols = []
-                            ef_rets = []
-                    
+                        min_vol = ef.min_volatility()
+                        min_vol_ret = ef.portfolio_performance()[0]
+                        min_vol_vol = ef.portfolio_performance()[1]
                     except Exception as e:
-                        st.error(f"❌ Error in efficient frontier calculation: {str(e)}")
-                        ef_vols = []
-                        ef_rets = []
+                        st.error(f"Error calculating minimum volatility portfolio: {e}")
+                        return
+                    
+                    # Get max return portfolio (100% allocation to highest return asset)
+                    max_ret_asset = mu.idxmax()
+                    max_ret = mu[max_ret_asset]
+                    max_ret_vol = np.sqrt(S.loc[max_ret_asset, max_ret_asset])
+                    
+                    # Generate points along the frontier
+                    target_returns = np.linspace(min_vol_ret, max_ret, 100)
+                    ef_points = []
+                    
+                    for target_ret in target_returns:
+                        try:
+                            ef.efficient_return(target_ret)
+                            vol = ef.portfolio_performance()[1]
+                            ef_points.append((target_ret, vol))
+                        except Exception as e:
+                            # Skip this point if optimization fails
+                            continue
                     
                     fig = go.Figure()
                     
-
+                    # Initialize variables for tangent line calculation
+                    ef_vols = []
+                    ef_rets = []
                     
-                    # Plot efficient frontier with enhanced validation and cloud optimization
-                    if ef_vols and ef_rets and len(ef_vols) >= 2 and len(ef_rets) >= 2:
-                        try:
-                            # Convert to numpy arrays and validate data
-                            ef_vols_array = np.array(ef_vols, dtype=float)
-                            ef_rets_array = np.array(ef_rets, dtype=float)
-                            
-                            # Remove any invalid values and ensure minimum data quality
-                            # Use more realistic bounds for financial data
-                            valid_mask = (np.isfinite(ef_vols_array) & 
-                                        np.isfinite(ef_rets_array) & 
-                                        (ef_vols_array > 0) & 
-                                        (ef_vols_array < 2) &  # Volatility up to 200% (more realistic)
-                                        (ef_rets_array > -1) & (ef_rets_array < 2))  # Returns up to 200% (more realistic)
-                            
-                            # Debug: show what's being filtered
-                            st.info(f"🔍 Data validation: {len(ef_vols_array)} total points, {np.sum(valid_mask)} valid points")
-                            if np.sum(valid_mask) < len(ef_vols_array):
-                                st.warning(f"⚠️ Filtered out {len(ef_vols_array) - np.sum(valid_mask)} points due to bounds")
-                                # Show the bounds that caused filtering
-                                vol_bounds = (ef_vols_array > 0) & (ef_vols_array < 2)
-                                ret_bounds = (ef_rets_array > -1) & (ef_rets_array < 2)
-                                st.info(f"Volatility bounds: {np.sum(vol_bounds)}/{len(ef_vols_array)} points valid")
-                                st.info(f"Return bounds: {np.sum(ret_bounds)}/{len(ef_rets_array)} points valid")
-                            
-                            if np.sum(valid_mask) >= 3:  # Require at least 3 points for good curve
-                                ef_vols_clean = ef_vols_array[valid_mask]
-                                ef_rets_clean = ef_rets_array[valid_mask]
-                                
-                                # Ensure data is sorted for proper line plotting
-                                sort_idx = np.argsort(ef_vols_clean)
-                                ef_vols_sorted = ef_vols_clean[sort_idx]
-                                ef_rets_sorted = ef_rets_clean[sort_idx]
-                                
-                                # SIMPLE APPROACH: Generate exactly 20 points and plot all 20
-                                # This ensures we don't lose any data range and keeps it simple
-                                if len(ef_vols_sorted) > 20:
-                                    # Use simple decimation to get exactly 20 points
-                                    step = max(1, len(ef_vols_sorted) // 20)
-                                    ef_vols_plot = ef_vols_sorted[::step]
-                                    ef_rets_plot = ef_rets_sorted[::step]
-                                    
-                                    # Ensure we have exactly 20 points (or close to it)
-                                    if len(ef_vols_plot) > 20:
-                                        # Take first 20 points
-                                        ef_vols_plot = ef_vols_plot[:20]
-                                        ef_rets_plot = ef_rets_plot[:20]
-                                    elif len(ef_vols_plot) < 20:
-                                        # If we have fewer than 20, add some intermediate points
-                                        while len(ef_vols_plot) < 20 and len(ef_vols_sorted) > len(ef_vols_plot):
-                                            # Add points from the middle
-                                            mid_idx = len(ef_vols_plot) // 2
-                                            if mid_idx < len(ef_vols_sorted):
-                                                ef_vols_plot = np.insert(ef_vols_plot, mid_idx, ef_vols_sorted[mid_idx])
-                                                ef_rets_plot = np.insert(ef_rets_plot, mid_idx, ef_rets_sorted[mid_idx])
-                                    
-                                    # CRITICAL: Always ensure we have the exact min and max points
-                                    if ef_vols_sorted.min() not in ef_vols_plot:
-                                        ef_vols_plot[0] = ef_vols_sorted.min()
-                                        ef_rets_plot[0] = ef_rets_sorted[0]
-                                    if ef_vols_sorted.max() not in ef_vols_plot:
-                                        ef_vols_plot[-1] = ef_vols_sorted.max()
-                                        ef_rets_plot[-1] = ef_rets_sorted[-1]
-                                    
-                                    # Sort to maintain order
-                                    sort_idx = np.argsort(ef_vols_plot)
-                                    ef_vols_plot = ef_vols_plot[sort_idx]
-                                    ef_rets_plot = ef_rets_plot[sort_idx]
-                                else:
-                                    # If we have 20 or fewer points, use them all
-                                    ef_vols_plot = ef_vols_sorted
-                                    ef_rets_plot = ef_rets_sorted
-                                
-                                # Add the efficient frontier line
-                                fig.add_trace(go.Scatter(
-                                    x=ef_vols_plot,
-                                    y=ef_rets_plot,
-                                    mode='lines',
-                                    name='Efficient Frontier',
-                                    line=dict(color='#1f77b4', width=3),
-                                    hovertemplate='Risk: %{x:.3f}<br>Return: %{y:.3f}<extra></extra>'
-                                ))
-                                
-                                # Add some debug info for cloud troubleshooting
-                                st.success(f"✅ Efficient Frontier plotted with {len(ef_vols_plot)} points (target: 20)")
-                                
-                                # Debug: show the actual data being plotted
-                                st.info(f"🔍 Plotting data: Volatility range {ef_vols_plot.min():.4f} to {ef_vols_plot.max():.4f}")
-                                st.info(f"🔍 Plotting data: Return range {ef_rets_plot.min():.4f} to {ef_rets_plot.max():.4f}")
-                                
-                                # CRITICAL: Verify that we preserved the full range
-                                original_vol_range = ef_vols_sorted.max() - ef_vols_sorted.min()
-                                plot_vol_range = ef_vols_plot.max() - ef_vols_plot.min()
-                                vol_range_preserved = abs(original_vol_range - plot_vol_range) < 0.001
-                                
-                                original_ret_range = ef_rets_sorted.max() - ef_rets_sorted.min()
-                                plot_ret_range = ef_rets_plot.max() - ef_rets_plot.min()
-                                ret_range_preserved = abs(original_ret_range - plot_ret_range) < 0.001
-                                
-                                if vol_range_preserved and ret_range_preserved:
-                                    st.success(f"✅ Full range preserved: Vol range {original_vol_range:.4f} → {plot_vol_range:.4f}, Ret range {original_ret_range:.4f} → {plot_ret_range:.4f}")
-                                else:
-                                    st.warning(f"⚠️ Range may be truncated: Vol range {original_vol_range:.4f} → {plot_vol_range:.4f}, Ret range {original_ret_range:.4f} → {plot_ret_range:.4f}")
-                                
-                                # Show first few points for verification
-                                if len(ef_vols_plot) > 0:
-                                    st.info(f"🔍 First 3 points: Vol=[{ef_vols_plot[:3]}], Ret=[{ef_rets_plot[:3]}]")
-                                    st.info(f"🔍 Last 3 points: Vol=[{ef_vols_plot[-3:]}], Ret=[{ef_rets_plot[-3:]}]]")
-                                    
-                                    # Show the exact min and max points
-                                    st.info(f"🔍 Min point: Vol={ef_vols_plot.min():.6f}, Ret={ef_rets_plot.min():.6f}")
-                                    st.info(f"🔍 Max point: Vol={ef_vols_plot.max():.6f}, Ret={ef_rets_plot.max():.6f}")
-                                
-                            else:
-                                st.warning("⚠️ Insufficient valid data points for efficient frontier. Generating synthetic curve...")
-                                # Generate a basic synthetic curve as last resort
-                                vol_range = np.linspace(0.15, 0.35, 10)
-                                ef_rets_synth = []
-                                for vol in vol_range:
-                                    # Simple quadratic curve
-                                    ret = 0.05 + 0.8 * vol - 0.3 * vol**2
-                                    ef_rets_synth.append(max(ret, 0.05))
-                                
-                                fig.add_trace(go.Scatter(
-                                    x=vol_range,
-                                    y=ef_rets_synth,
-                                    mode='lines',
-                                    name='Efficient Frontier (Synthetic)',
-                                    line=dict(color='#1f77b4', width=2, dash='dot'),
-                                    hovertemplate='Risk: %{x:.3f}<br>Return: %{y:.3f}<extra></extra>'
-                                ))
-                                
-                        except Exception as plot_error:
-                            st.error(f"Error plotting efficient frontier: {plot_error}")
-                            
-                            # Try a simple fallback plot
-                            try:
-                                st.warning("🔄 Attempting simple fallback plot...")
-                                # Create a basic plot with minimal processing
-                                fig_fallback = go.Figure()
-                                fig_fallback.add_trace(go.Scatter(
-                                    x=ef_vols,
-                                    y=ef_rets,
-                                    mode='lines+markers',
-                                    name='Efficient Frontier (Fallback)',
-                                    line=dict(color='red', width=2),
-                                    marker=dict(size=4)
-                                ))
-                                fig_fallback.update_layout(
-                                    title="Efficient Frontier (Fallback)",
-                                    xaxis_title="Annual Volatility",
-                                    yaxis_title="Annual Return",
-                                    height=600
-                                )
-                                st.plotly_chart(fig_fallback, use_container_width=True)
-                                st.success("✅ Fallback plot rendered successfully")
-                            except Exception as fallback_error:
-                                st.error(f"Fallback plot also failed: {fallback_error}")
-                            
-                            # Last resort: show data as text
-                            st.write("Efficient Frontier Data (Raw):")
-                            for i, (vol, ret) in enumerate(zip(ef_vols, ef_rets)):
-                                st.write(f"Point {i+1}: Vol={vol:.4f}, Ret={ret:.4f}")
+                    # Plot efficient frontier
+                    if ef_points and len(ef_points) > 0:
+                        ef_vols = [point[1] for point in ef_points]
+                        ef_rets = [point[0] for point in ef_points]
+                        fig.add_trace(go.Scatter(
+                            x=ef_vols,
+                            y=ef_rets,
+                            mode='lines',
+                            name='Efficient Frontier',
+                            line=dict(color='#1f77b4', width=2)
+                        ))
                     else:
-                        st.warning("⚠️ No efficient frontier data available. Please check your portfolio configuration.")
+                        st.warning("Could not generate efficient frontier points. This may happen with limited data or extreme market conditions.")
                     
                     # Plot individual assets
                     for ticker in selected_tickers:
@@ -1314,17 +936,22 @@ def main():
                             # Calculate tangent line points
                             # Line goes from (0, risk_free_rate) to (sharpe_vol, sharpe_ret)
                             # Extend line to x-axis limit for better visualization
-                            if ef_vols:
+                            if ef_vols and len(ef_vols) > 0:
                                 max_vol = max(ef_vols)
                             else:
                                 max_vol = sharpe_vol * 1.5
                             
-                            # Calculate slope of tangent line
-                            slope = (sharpe_ret - risk_free_rate) / sharpe_vol
-                            
-                            # Generate points for tangent line
-                            x_tangent = [0, max_vol]
-                            y_tangent = [risk_free_rate, risk_free_rate + slope * max_vol]
+                            # Calculate slope of tangent line (avoid division by zero)
+                            if sharpe_vol > 0:
+                                slope = (sharpe_ret - risk_free_rate) / sharpe_vol
+                                
+                                # Generate points for tangent line
+                                x_tangent = [0, max_vol]
+                                y_tangent = [risk_free_rate, risk_free_rate + slope * max_vol]
+                            else:
+                                # Fallback if sharpe_vol is zero or negative
+                                x_tangent = [0, max_vol]
+                                y_tangent = [risk_free_rate, risk_free_rate]
                             
                             # Plot tangent line
                             fig.add_trace(go.Scatter(
@@ -1357,35 +984,20 @@ def main():
                             ))
                             
                         except Exception as e:
-                            pass
+                            st.warning(f"Could not calculate tangent line: {e}")
                     
                     fig.update_layout(
                         title="Efficient Frontier",
                         xaxis_title="Annual Volatility",
                         yaxis_title="Annual Return",
-                        height=600,
-                        # Add additional layout options for better cloud rendering
-                        margin=dict(l=50, r=50, t=80, b=50),
-                        showlegend=True,
-                        legend=dict(x=0.02, y=0.98),
-                        # Ensure proper axis configuration
-                        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray'),
-                        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='lightgray')
+                        height=600
                     )
                     
-                    # Render the plot directly
-                    try:
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as plot_render_error:
-                        st.error(f"Error rendering plot: {plot_render_error}")
-                        # Simple fallback: show data as text
-                        if ef_vols and ef_rets and len(ef_vols) >= 2:
-                            st.write("Efficient Frontier Data:")
-                            for i, (vol, ret) in enumerate(zip(ef_vols, ef_rets)):
-                                st.write(f"Point {i+1}: Volatility = {vol:.4f}, Return = {ret:.4f}")
+                    st.plotly_chart(fig, use_container_width=True)
                     
                 except Exception as e:
                     st.error(f"Error generating efficient frontier: {e}")
+                    st.info("This may happen with limited data or extreme market conditions. Try selecting different assets or a longer time period.")
     
     # Tab 4: Risk Analysis
     with tab4:
